@@ -4,6 +4,16 @@ Your music's best friend isn't just imaginary anymore... meet **Shuffleupagus**!
 
 Shuffleupagus is an open-source tool for generating and synchronizing smart, balanced music playlists across multiple streaming services, including Spotify and Apple Music. It is designed to help you create playlists that fairly represent your favorite artists, avoid unwanted tracks or albums, and keep your playlists fresh and interesting.
 
+## About
+
+This project started as a manual playlist that I was keeping up-to-date based on posts I saw on social media or related.
+
+I soon ran into issue where I would not go back and add new stuff from artists, and also prolific artists would sort of "drown out" artists with a smaller catalog.
+
+I set out to make something that balances highlighting popular tracks from each artist I want it to contain, as well as filling in with a reasonable amount of back catalog, but without overwhelming.
+
+Thus: Shuffleupagus was born.
+
 ## Features
 
 - **Multi-Service Support:** Pluggable architecture with support for multiple services.
