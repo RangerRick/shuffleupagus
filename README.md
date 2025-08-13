@@ -19,7 +19,7 @@ Thus: Shuffleupagus was born.
 - **Multi-Service Support:** Pluggable architecture with support for multiple services.
 - **Artist Prioritization:** Mark favorite artists as VIPs to increase their presence in playlists.
 - **Exclusion Rules:** Exclude specific albums or tracks from your playlists.
-- **Balanced Shuffling:** Uses a balanced shuffle algorithm to distribute tracks evenly among artists.
+- **Balanced Shuffling:** Uses a [balanced shuffle algorithm](http://keyj.emphy.de/balanced-shuffle/) to distribute tracks evenly among artists.
 - **Caching:** Caches API responses for efficiency and reduced API usage.
 - **Configurable:** All settings are managed via YAML configuration files.
 
