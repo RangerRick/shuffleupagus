@@ -6,11 +6,11 @@ Shuffleupagus is an open-source tool for generating and synchronizing smart, bal
 
 ## About
 
-This project started as a manual playlist that I was keeping up-to-date based on posts I saw on social media or related.
+This project started as a manual playlist that I was keeping up-to-date based on posts I saw on social media or other word-of-mouth.
 
-I soon ran into issue where I would not go back and add new stuff from artists, and also prolific artists would sort of "drown out" artists with a smaller catalog.
+I soon ran into an issue where I would miss adding new stuff from established artists, and also prolific artists would drown out artists with a smaller catalog.
 
-I set out to make something that balances highlighting popular tracks from each artist I want it to contain, as well as filling in with a reasonable amount of back catalog, but without overwhelming.
+I set out to make something that balances highlighting popular tracks from each artist, as well as filling in with a reasonable amount of back catalog, without overwhelming.
 
 Thus: Shuffleupagus was born.
 
