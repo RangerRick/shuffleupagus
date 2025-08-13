@@ -55,6 +55,10 @@ You must have an Apple Developer account, and [generate a media identifier and p
 
 Additionally, you have to have a "media user token" which unfortunately can only be retrieved by logging in to https://music.apple.com/, viewing network connections in the developer console, and then looking for the `Media-User-Token` header in a request to `amp-api.music.apple.com`.
 
+**NOTE**: The Apple Music API does not officially support deleting songs from playlists!
+To work around this, Shuffleupagus must be run on a Mac with Music.app installed.
+It will speak to Music.app to clear the playlist, rather than the Apple Music API, and then wait for the changes to sync, before re-pushing the playlist. 🤮
+
 #### Spotify
 
 Follow the instructions at [the Spotify web developer portal](https://developer.spotify.com/documentation/web-api) to create a client ID and secret.
