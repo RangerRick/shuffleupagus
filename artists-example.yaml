@@ -1,0 +1,14 @@
+"Nine Inch Nails":
+  # make this artist statistically likely to have a song near the start of the playlist
+  "vip": true
+  # service names should match the plugin name path
+  "services":
+    "appleMusic": "https://music.apple.com/us/artist/nine-inch-nails/107917"
+    "spotify": "https://open.spotify.com/artist/0X380XXQSNBYuleKzav5UO"
+  "exclude":
+    "spotify":
+      "albums":
+        - "spotify:album:63W4cQKfF2HTjgRYZcQ0tU" # I don't really hate the Quake soundtrack, this is just an example!
+      "tracks":
+        - "spotify:track:00ykNeSOzoNGkeRN0LSqGT" # This one sucks. ;)
+

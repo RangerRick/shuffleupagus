@@ -1,0 +1,17 @@
+"services":
+  "appleMusic":
+    enabled: false
+    # the path to your secret key, downloaded from the Apple developer portal
+    "secret-key": "~/Downloads/AuthKey_XXXXXXXXXX.p8"
+    "key-id": "XXXXXXXXXX"
+    "team-id": "YYYYYYYYYY"
+    # fetch from music.apple.com
+    "media-user-token": "ZZZZZZZZZ=="
+    "playlist": "Real Playlist Name"
+    "test-playlist": "Test Playlist Name"
+  "spotify":
+    enabled: false
+    "client-id": "XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX"
+    "client-secret": "YYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYY"
+    "playlist": "Real Playlist Name"
+    "test-playlist": "Test Playlist Name"

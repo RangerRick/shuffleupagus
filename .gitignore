@@ -1,0 +1,11 @@
+.*cache*
+
+# python stuff
+/build/
+/\.?venv/
+__pycache__
+*.pyc
+*.egg-info
+
+.sw[opqrs]
+.*.sw[opqrs]
