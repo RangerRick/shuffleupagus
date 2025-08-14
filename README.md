@@ -110,4 +110,4 @@ Contributions are welcome! Please open issues or pull requests on GitHub.
 
 Here are some example playlists that used Shuffleupagus to generate them:
 
-* [<img src="logos/spotify.png" alt="Spotify" height="16" />](https://open.spotify.com/playlist/50aqIz3lyBbzYEz7K3lAgb) [<img src="logos/apple-music.png" alt="Apple Music" height="16" />](https://music.apple.com/us/playlist/no-fash-dungeon-synth-and-ds-adjacent/pl.u-kv9lbZ5u4yo6j) No Fash Dungeon Synth (and DS-Adjacent)
+[<img src="logos/spotify.png" alt="Spotify" height="16" />](https://open.spotify.com/playlist/50aqIz3lyBbzYEz7K3lAgb) [<img src="logos/apple-music.png" alt="Apple Music" height="16" />](https://music.apple.com/us/playlist/no-fash-dungeon-synth-and-ds-adjacent/pl.u-kv9lbZ5u4yo6j) No Fash Dungeon Synth (and DS-Adjacent)
