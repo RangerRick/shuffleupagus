@@ -146,8 +146,8 @@ class YoutubeService(Service):
                 channel_id = m.group(1)
                 break
 
-        if not channel_id:
-            raise ValueError(f"Channel ID not found in page text for artist handle: {artist}")
+        if not channel_id or not channel_id.startswith("UC"):
+            raise ValueError(f"Could not extract a valid channel ID for artist handle: {artist} (got: {channel_id!r})")
 
         handle = artist if artist.startswith("@") else None
         if not handle:
