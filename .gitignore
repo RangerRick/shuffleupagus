@@ -3,14 +3,12 @@
 # python stuff
 .coverage
 coverage.xml
+.hypothesis/
 /build/
 /\.?venv/
 __pycache__
 *.pyc
 *.egg-info
-.coverage
-.hypothesis/
 
 .sw[opqrs]
 .*.sw[opqrs]
-.hypothesis/
