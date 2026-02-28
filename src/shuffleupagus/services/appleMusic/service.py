@@ -124,8 +124,9 @@ class AppleMusicService(Service):
             if "relationships" in track_obj:
                 if "artists" in track_obj["relationships"]:
                     for artist in track_obj["relationships"]["artists"]["data"]:
-                        artist = self.get_artist(artist["id"])
-                        artists.append(artist)
+                        resolved_artist = self.get_artist(artist["id"])
+                        if resolved_artist is not None:
+                            artists.append(resolved_artist)
                 if "albums" in track_obj["relationships"]:
                     album = self.get_album_by_id(track_obj["relationships"]["albums"]["data"][0]["id"])
 
@@ -192,8 +193,9 @@ class AppleMusicService(Service):
 
         tracks = []
         for track in ret["data"] or []:
-            track = self._get_track_by_id(track["id"])
-            tracks.append(track)
+            resolved = self._get_track_by_id(track["id"])
+            if resolved is not None:
+                tracks.append(resolved)
         return tracks
 
     def __get_media_headers(self) -> dict:
