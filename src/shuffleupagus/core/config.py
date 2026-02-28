@@ -1,12 +1,16 @@
 import os
+from pathlib import Path
 
 import yaml
 
+_CONFIG_DIR = Path("~/.config/shuffleupagus").expanduser()
+
 
 def get_filepath(name: str) -> str:
-    if os.sep in name:
-        raise ValueError("Path traversal detected")
-    return os.path.expanduser(f"~/.config/shuffleupagus/{name}")
+    resolved = (_CONFIG_DIR / name).resolve()
+    if not resolved.is_relative_to(_CONFIG_DIR.resolve()):
+        raise ValueError(f"Path traversal detected: {name!r}")
+    return str(resolved)
 
 
 class Config:
