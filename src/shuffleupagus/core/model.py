@@ -151,13 +151,17 @@ class Service:
 
     def generate_playlist(
         self,
-        artist_ids: list[str] = [],
-        excluded_album_ids: list[str] = [],
-        excluded_track_ids: list[str] = [],
-        vip_artist_ids: list[str] = [],
+        artist_ids: list[str] | None = None,
+        excluded_album_ids: list[str] | None = None,
+        excluded_track_ids: list[str] | None = None,
+        vip_artist_ids: list[str] | None = None,
     ) -> list[str]:
+        _artist_ids: list[str] = [] if artist_ids is None else artist_ids
+        _excluded_album_ids: list[str] = [] if excluded_album_ids is None else excluded_album_ids
+        _excluded_track_ids: list[str] = [] if excluded_track_ids is None else excluded_track_ids
+        _vip_artist_ids: list[str] = [] if vip_artist_ids is None else vip_artist_ids
         artist_playlists: dict[str, list[Track]] = {}
-        total = len(artist_ids)
+        total = len(_artist_ids)
 
         def _process(idx: int, artist_id: str) -> tuple[str, list[Track]]:
             artist = self.get_artist(artist_id)
@@ -170,10 +174,10 @@ class Service:
                 t
                 for t in top_tracks
                 if (
-                    not t.is_excluded(excluded_track_ids)
+                    not t.is_excluded(_excluded_track_ids)
                     and not t.longer_than(MAX_TRACK_LENGTH_MS)
                     and t.album is not None
-                    and not t.album.is_excluded(excluded_album_ids)
+                    and not t.album.is_excluded(_excluded_album_ids)
                 )
             ]
             top_track_ids = {t.id for t in top_tracks}
@@ -185,10 +189,10 @@ class Service:
                 for t in artist_tracks
                 if (
                     t.id not in top_track_ids
-                    and not t.is_excluded(excluded_track_ids)
+                    and not t.is_excluded(_excluded_track_ids)
                     and not t.longer_than(MAX_TRACK_LENGTH_MS)
                     and t.album is not None
-                    and not t.album.is_excluded(excluded_album_ids)
+                    and not t.album.is_excluded(_excluded_album_ids)
                 )
             ]
 
@@ -209,12 +213,14 @@ class Service:
             return artist_id, playlist
 
         with ThreadPoolExecutor(max_workers=4) as executor:
-            futures = {executor.submit(_process, idx, artist_id): artist_id for idx, artist_id in enumerate(artist_ids)}
+            futures = {
+                executor.submit(_process, idx, artist_id): artist_id for idx, artist_id in enumerate(_artist_ids)
+            }
             for future in as_completed(futures):
                 a_id, playlist = future.result()
                 artist_playlists[a_id] = playlist
 
-        return spread_artist_playlists(artist_playlists, vip_artist_ids)
+        return spread_artist_playlists(artist_playlists, _vip_artist_ids)
 
     def sync(self, playlist_name: str, tracks: list[str] = []) -> None:
         raise NotImplementedError

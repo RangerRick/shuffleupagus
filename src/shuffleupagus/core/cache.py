@@ -73,6 +73,8 @@ class Cache:
         """Remove a cache entry. Returns True if found."""
         if key in self._cache:
             del self._cache[key]
+            if self.autosave:
+                self._maybe_autosave()
             return True
         return False
 

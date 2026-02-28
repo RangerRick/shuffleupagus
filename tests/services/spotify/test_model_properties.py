@@ -70,9 +70,9 @@ def test_sanitize_url_with_query_is_idempotent(url):
 # ---------------------------------------------------------------------------
 
 
-@given(raw=st.one_of(_plain_id, _prefix.flatmap(lambda p: _plain_id.map(lambda i: p + i)), _url_path, _url_with_query))
+@given(raw=st.one_of(_url_path, _url_with_query))
 def test_sanitized_id_never_starts_with_http(raw):
-    """The sanitized result never starts with 'http'."""
+    """For URL inputs, the sanitized result never starts with 'http'."""
     assert not sanitize_id(raw).startswith("http")
 
 

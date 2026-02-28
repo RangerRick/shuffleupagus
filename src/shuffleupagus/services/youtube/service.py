@@ -230,14 +230,14 @@ class YoutubeService(Service):
         albums = []
 
         ret = self.cache.read(cache_key)
-        if not ret:
+        if ret is None:
             # Derive the current "latest album" fingerprint from the get_artist response,
             # which is already in memory — no extra API call required.
             inline = artist.inlineAlbums
             current_fp = inline[0]["browseId"] if inline else None
 
             stale = self.cache.read_stale(cache_key)
-            if stale and current_fp is not None:
+            if stale is not None and current_fp is not None:
                 cached_fp = self.cache.read_stale(fp_key)
                 if cached_fp == current_fp:
                     logger.debug(f"* fingerprint match for {artist.name}, extending cache")
@@ -245,7 +245,7 @@ class YoutubeService(Service):
                     self.cache.write(fp_key, current_fp, ttl=_FINGERPRINT_TTL)
                     ret = stale
 
-        if not ret:
+        if ret is None:
             if albums_browse_id is not None and albums_params is not None:
                 # artist has a paginated album list; fetch all
                 ret = self.client.get_artist_albums(albums_browse_id, albums_params, limit=100)

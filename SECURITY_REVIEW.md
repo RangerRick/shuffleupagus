@@ -171,7 +171,7 @@ The `spread_artist_playlists` tests initially used pytest's `monkeypatch` fixtur
 
 ---
 
-## Issue Register (All 17 Issues)
+## Issue Register (All 19 Issues)
 
 | ID | Priority | Source | Title |
 |----|----------|--------|-------|
