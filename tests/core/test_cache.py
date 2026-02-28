@@ -1,3 +1,4 @@
+import threading
 import time
 
 import pytest
@@ -78,6 +79,8 @@ def test_clean_evicts_expired(tmp_path, monkeypatch):
     c.cutoff = 60.0
     c.autosave = False
     c._update_count = 0
+    c._lock = threading.Lock()
+    c._saving = False
     c._cache = {}
     monkeypatch.setattr(Cache, "_filename", lambda self: str(tmp_path / "t.joblib.gz"))
 
@@ -129,3 +132,103 @@ def test_autosave_triggers(tmp_path, monkeypatch):
     assert c2.read("k0") == 0
 
     cache_mod.CACHE_AUTOSAVE_LIMIT = original
+
+
+# ---------------------------------------------------------------------------
+# Concurrent access tests
+# ---------------------------------------------------------------------------
+
+NUM_THREADS = 8
+OPS_PER_THREAD = 200
+
+
+def test_concurrent_reads_and_writes(cache):
+    """8 threads doing interleaved reads/writes produce no exceptions."""
+    errors: list[Exception] = []
+
+    def worker(thread_id):
+        try:
+            for i in range(OPS_PER_THREAD):
+                key = f"t{thread_id}-k{i % 20}"
+                cache.write(key, i)
+                cache.read(key)
+                cache.read_stale(key)
+                cache.touch(key)
+                if i % 5 == 0:
+                    cache.delete(key)
+        except Exception as exc:
+            errors.append(exc)
+
+    threads = [threading.Thread(target=worker, args=(t,)) for t in range(NUM_THREADS)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(timeout=10)
+
+    alive = [t for t in threads if t.is_alive()]
+    assert not alive, "Deadlock detected: threads still alive after timeout"
+    assert not errors, f"Concurrent access raised: {errors}"
+
+
+def test_concurrent_write_and_save(tmp_path, monkeypatch):
+    """Concurrent writes during save() produce no corruption."""
+    path = str(tmp_path / "concurrent.joblib.gz")
+    monkeypatch.setattr(Cache, "_filename", lambda self: path)
+    c = Cache("concurrent", autosave=False)
+    errors: list[Exception] = []
+
+    def writer(thread_id):
+        try:
+            for i in range(OPS_PER_THREAD):
+                c.write(f"t{thread_id}-k{i}", i)
+        except Exception as exc:
+            errors.append(exc)
+
+    def saver():
+        try:
+            for _ in range(20):
+                c.save()
+        except Exception as exc:
+            errors.append(exc)
+
+    threads = [threading.Thread(target=writer, args=(t,)) for t in range(NUM_THREADS)]
+    threads.append(threading.Thread(target=saver))
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(timeout=10)
+
+    alive = [t for t in threads if t.is_alive()]
+    assert not alive, "Deadlock detected: threads still alive after timeout"
+    assert not errors, f"Concurrent write+save raised: {errors}"
+
+
+def test_autosave_under_contention(tmp_path, monkeypatch):
+    """Autosave with low threshold and 8 threads does not deadlock."""
+    import shuffleupagus.core.cache as cache_mod
+
+    path = str(tmp_path / "contention.joblib.gz")
+    monkeypatch.setattr(Cache, "_filename", lambda self: path)
+    original = cache_mod.CACHE_AUTOSAVE_LIMIT
+    cache_mod.CACHE_AUTOSAVE_LIMIT = 5
+
+    c = Cache("contention", autosave=True)
+    errors: list[Exception] = []
+
+    def worker(thread_id):
+        try:
+            for i in range(OPS_PER_THREAD):
+                c.write(f"t{thread_id}-k{i}", i)
+        except Exception as exc:
+            errors.append(exc)
+
+    threads = [threading.Thread(target=worker, args=(t,)) for t in range(NUM_THREADS)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(timeout=30)
+
+    alive = [t for t in threads if t.is_alive()]
+    cache_mod.CACHE_AUTOSAVE_LIMIT = original
+    assert not alive, "Deadlock detected: threads still alive after timeout"
+    assert not errors, f"Autosave contention raised: {errors}"
