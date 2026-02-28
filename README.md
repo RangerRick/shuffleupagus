@@ -25,7 +25,7 @@ Thus: Shuffleupagus was born.
 
 ## Requirements
 
-- Python 3.13+
+- Python 3.14+
 - [uv](https://docs.astral.sh/uv/) for dependency management
 - See [pyproject.toml](pyproject.toml) for all dependencies.
 

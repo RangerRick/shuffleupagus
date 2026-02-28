@@ -52,7 +52,7 @@ class YoutubeService(Service):
             data = json.loads(auth_file.read_text())
             if "refresh_token" in data and "access_token" in data:
                 return data
-        except (FileNotFoundError, json.JSONDecodeError, OSError):
+        except FileNotFoundError, json.JSONDecodeError, OSError:
             pass
         return None
 
