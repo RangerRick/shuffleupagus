@@ -17,15 +17,21 @@ class AppleMusicService(Service):
 
     client: applemusicpy.AppleMusic
 
+    def _require_config(self, key: str) -> str:
+        val = self.config.get(key)
+        if val is None:
+            raise ValueError(f"Missing required config key 'services.appleMusic.{key}'")
+        return val
+
     def login(self):
-        keyfile_path = os.path.join(os.path.expanduser("~/.config/shuffleupagus"), self.config["secret-key"])
+        keyfile_path = os.path.join(os.path.expanduser("~/.config/shuffleupagus"), self._require_config("secret-key"))
         with open(keyfile_path) as keyfile:
             key = keyfile.read().strip()
 
         self.client = applemusicpy.AppleMusic(
             secret_key=key,
-            key_id=self.config["key-id"],
-            team_id=self.config["team-id"],
+            key_id=self._require_config("key-id"),
+            team_id=self._require_config("team-id"),
         )
 
     def close(self):
@@ -200,7 +206,7 @@ class AppleMusicService(Service):
 
     def __get_media_headers(self) -> dict:
         headers = self.client._auth_headers()
-        headers["Media-User-Token"] = self.config["media-user-token"]
+        headers["Media-User-Token"] = self._require_config("media-user-token")
         return headers
 
     def __get_playlist_length(self, playlist_id: str) -> int:

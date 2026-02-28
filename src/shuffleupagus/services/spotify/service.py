@@ -18,11 +18,17 @@ class SpotifyService(Service):
 
     spotify: spotipy.Spotify
 
+    def _require_config(self, key: str) -> str:
+        val = self.config.get(key)
+        if val is None:
+            raise ValueError(f"Missing required config key 'services.spotify.{key}'")
+        return val
+
     def login(self):
         creds = SpotifyOAuth(
-            client_id=self.config["client-id"],
-            client_secret=self.config["client-secret"],
-            scope=self.config["scope"],
+            client_id=self._require_config("client-id"),
+            client_secret=self._require_config("client-secret"),
+            scope=self._require_config("scope"),
             redirect_uri="http://localhost:9090/",
         )
         self.spotify = spotipy.Spotify(auth_manager=creds)

@@ -30,8 +30,14 @@ class YoutubeService(Service):
 
     client: YTMusic
 
+    def _require_config(self, key: str) -> str:
+        val = self.config.get(key)
+        if val is None:
+            raise ValueError(f"Missing required config key 'services.youtube.{key}'")
+        return val
+
     def login(self):
-        auth_file = Path(get_filepath(self.config["auth-file"]))
+        auth_file = Path(get_filepath(self._require_config("auth-file")))
         client_id = self.config.get("client-id")
         client_secret = self.config.get("client-secret")
 
