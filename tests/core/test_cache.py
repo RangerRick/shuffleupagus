@@ -28,6 +28,50 @@ def test_write_overwrites(cache):
     assert cache.read("k") == "second"
 
 
+def test_read_expired_returns_none(cache):
+    # Inject an expired entry directly (timestamp in the past, short TTL)
+    cache._cache["stale"] = ["stale_value", time.time() - 3600, 60.0]
+    assert cache.read("stale") is None
+
+
+def test_read_stale_returns_expired_value(cache):
+    cache._cache["stale"] = ["stale_value", time.time() - 3600, 60.0]
+    assert cache.read("stale") is None           # expired: read() returns None
+    assert cache.read_stale("stale") == "stale_value"  # stale read still returns value
+
+
+def test_read_stale_missing_returns_none(cache):
+    assert cache.read_stale("ghost") is None
+
+
+def test_touch_refreshes_expired_entry(cache):
+    cache._cache["old"] = ["val", time.time() - 3600, 60.0]
+    assert cache.read("old") is None
+    assert cache.touch("old") is True
+    assert cache.read("old") == "val"
+
+
+def test_touch_missing_returns_false(cache):
+    assert cache.touch("ghost") is False
+
+
+def test_delete_removes_entry(cache):
+    cache.write("to_delete", "val")
+    assert cache.delete("to_delete") is True
+    assert cache.read("to_delete") is None
+
+
+def test_delete_missing_returns_false(cache):
+    assert cache.delete("ghost") is False
+
+
+def test_write_custom_ttl(cache):
+    # write with explicit short TTL; entry expires immediately when injected old
+    cache._cache["short"] = ["val", time.time() - 10, 5.0]
+    assert cache.read("short") is None           # expired
+    assert cache.read_stale("short") == "val"    # stale read returns it
+
+
 def test_clean_evicts_expired(tmp_path, monkeypatch):
     c = Cache.__new__(Cache)
     c.name = "test"
@@ -37,9 +81,8 @@ def test_clean_evicts_expired(tmp_path, monkeypatch):
     c._cache = {}
     monkeypatch.setattr(Cache, "_filename", lambda self: str(tmp_path / "t.joblib.gz"))
 
-    # write an entry with a timestamp far in the past
-    c._cache["old"] = ["stale_value", time.time() - 3600]
-    c._cache["fresh"] = ["fresh_value", time.time()]
+    c._cache["old"] = ["stale_value", time.time() - 3600, 60.0]
+    c._cache["fresh"] = ["fresh_value", time.time(), 60.0]
 
     evicted = c._clean()
 

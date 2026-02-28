@@ -2,6 +2,7 @@ import datetime
 import random
 import string
 import unicodedata
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from .cache import CACHE_DEFAULT_CUTOFF, Cache
 from .config import Config
@@ -150,89 +151,76 @@ class Service:
 
     def generate_playlist(
         self,
-        artist_ids: list[str] = [],
-        excluded_album_ids: list[str] = [],
-        excluded_track_ids: list[str] = [],
-        vip_artist_ids: list[str] = [],
+        artist_ids: list[str] | None = None,
+        excluded_album_ids: list[str] | None = None,
+        excluded_track_ids: list[str] | None = None,
+        vip_artist_ids: list[str] | None = None,
     ) -> list[str]:
-        artist_playlists = {}
+        _artist_ids: list[str] = [] if artist_ids is None else artist_ids
+        _excluded_album_ids: list[str] = [] if excluded_album_ids is None else excluded_album_ids
+        _excluded_track_ids: list[str] = [] if excluded_track_ids is None else excluded_track_ids
+        _vip_artist_ids: list[str] = [] if vip_artist_ids is None else vip_artist_ids
+        artist_playlists: dict[str, list[Track]] = {}
+        total = len(_artist_ids)
 
-        artist_count = 0
-        for artistId in artist_ids:
-            # logger.debug(f"* processing artist {artistId} ({artist_count+1}/{len(artist_ids)})")
-            artist = self.get_artist(artistId)
+        def _process(idx: int, artist_id: str) -> tuple[str, list[Track]]:
+            artist = self.get_artist(artist_id)
             if artist is None:
-                logger.error(f"* artist {artistId} not found, skipping ({artist_count + 1}/{len(artist_ids)})")
-                raise ValueError(f"Artist {artistId} not found")
-            logger.info(f"* processing artist {artist.name} ({artist_count + 1}/{len(artist_ids)})")
+                raise ValueError(f"Artist {artist_id} not found")
+            logger.info(f"* processing artist {artist.name} ({idx + 1}/{total})")
 
-            logger.debug("  * getting top tracks")
             top_tracks = self.get_artist_top_tracks(artist)
-            top_tracks = list(
-                filter(
-                    lambda track: (
-                        not track.is_excluded(excluded_track_ids)
-                        and not track.longer_than(MAX_TRACK_LENGTH_MS)
-                        and track.album is not None
-                        and not track.album.is_excluded(excluded_album_ids)
-                    ),
-                    top_tracks,
+            top_tracks = [
+                t
+                for t in top_tracks
+                if (
+                    not t.is_excluded(_excluded_track_ids)
+                    and not t.longer_than(MAX_TRACK_LENGTH_MS)
+                    and t.album is not None
+                    and not t.album.is_excluded(_excluded_album_ids)
                 )
-            )
-            top_track_ids = [track.id for track in top_tracks]
+            ]
+            top_track_ids = {t.id for t in top_tracks}
+            seen_hashes = {t.dedupe_hash for t in top_tracks}
 
-            seen_hashes = set(map(lambda track: track.dedupe_hash, top_tracks))
-
-            logger.debug("  * getting remaining tracks")
             artist_tracks = self.get_artist_tracks(artist)
-            artist_tracks = list(
-                filter(
-                    lambda track: (
-                        track.id not in top_track_ids
-                        and not track.is_excluded(excluded_track_ids)
-                        and not track.longer_than(MAX_TRACK_LENGTH_MS)
-                        and track.album is not None
-                        and not track.album.is_excluded(excluded_album_ids)
-                    ),
-                    artist_tracks,
+            artist_tracks = [
+                t
+                for t in artist_tracks
+                if (
+                    t.id not in top_track_ids
+                    and not t.is_excluded(_excluded_track_ids)
+                    and not t.longer_than(MAX_TRACK_LENGTH_MS)
+                    and t.album is not None
+                    and not t.album.is_excluded(_excluded_album_ids)
                 )
-            )
-            logger.debug(f"  * found {len(artist_tracks)} tracks")
+            ]
 
-            # debug artist tracks by ISRC if available
-            logger.debug("  * deduplicating tracks")
-            deduped_artist_tracks: list[Track] = []
+            deduped: list[Track] = []
             for track in artist_tracks:
-                dedupe_hash = getattr(track, "dedupe_hash", None)
-                if dedupe_hash:
-                    if dedupe_hash in seen_hashes:
-                        # print(f"* found duplicate track {track.name} ({artist.name}, {track.id})", flush=True)
-                        continue
-                    seen_hashes.add(dedupe_hash)
-                deduped_artist_tracks.append(track)
-            artist_tracks = deduped_artist_tracks
+                h = getattr(track, "dedupe_hash", None)
+                if h and h in seen_hashes:
+                    continue
+                if h:
+                    seen_hashes.add(h)
+                deduped.append(track)
 
-            # shuffle so that we only pick a random subset of artist tracks if they have many
-            random.shuffle(artist_tracks)
+            random.shuffle(deduped)
+            playlist = top_tracks[0:MAX_TOP_TRACKS] + deduped + top_tracks[MAX_TOP_TRACKS:-1]
+            playlist = playlist[0 : MAX_TOP_TRACKS + MAX_ARTIST_TRACKS]
+            logger.info(f"  * found {len(playlist)} valid tracks for {artist.name}")
+            random.shuffle(playlist)
+            return artist_id, playlist
 
-            # Take up to MAX_TOP_TRACKS top tracks, append all shuffled artist tracks,
-            # then append the remaining top tracks.
-            #
-            # This means that when we truncate, if someone has no album tracks,
-            # it will get the rest of the top tracks to fill out up to MAX+MAX length
+        with ThreadPoolExecutor(max_workers=4) as executor:
+            futures = {
+                executor.submit(_process, idx, artist_id): artist_id for idx, artist_id in enumerate(_artist_ids)
+            }
+            for future in as_completed(futures):
+                a_id, playlist = future.result()
+                artist_playlists[a_id] = playlist
 
-            artist_playlist = top_tracks[0:MAX_TOP_TRACKS] + artist_tracks + top_tracks[MAX_TOP_TRACKS:-1]
-            artist_playlist = artist_playlist[0 : MAX_TOP_TRACKS + MAX_ARTIST_TRACKS]
-            logger.info(f"  * found {len(artist_playlist)} valid tracks for {artist.name}")
-
-            # then we shuffle the whole truncated playlist of MAX+MAX length and save it
-            random.shuffle(artist_playlist)
-
-            artist_playlists[artistId] = artist_playlist
-
-            artist_count += 1
-
-        return spread_artist_playlists(artist_playlists, vip_artist_ids)
+        return spread_artist_playlists(artist_playlists, _vip_artist_ids)
 
     def sync(self, playlist_name: str, tracks: list[str] = []) -> None:
         raise NotImplementedError

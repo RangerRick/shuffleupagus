@@ -1,6 +1,8 @@
 .*cache*
 
 # python stuff
+.coverage
+coverage.xml
 /build/
 /\.?venv/
 __pycache__
@@ -9,3 +11,4 @@ __pycache__
 
 .sw[opqrs]
 .*.sw[opqrs]
+.hypothesis/

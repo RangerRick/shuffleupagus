@@ -200,6 +200,45 @@ def test_get_artist_albums_cache_hit(svc):
     svc.client.get_artist_albums.assert_not_called()
 
 
+def test_get_artist_albums_fingerprint_match_uses_stale(svc):
+    """Stale cached albums + matching inline fingerprint → no API call."""
+    import time
+    from shuffleupagus.services.youtube.model import YoutubeArtist
+
+    stale = [{"browseId": "MPL1", "title": "Album", "year": "2020"}]
+    svc.cache._cache["artist:UCabc:albums"] = [stale, time.time() - 3600, 60.0]
+
+    artist = YoutubeArtist("UCabc", "Band")
+    artist.inlineAlbums = [{"browseId": "MPL1", "title": "Album", "year": "2020"}]
+
+    albums = svc.get_artist_albums(artist)
+    assert len(albums) == 1
+    svc.client.get_artist_albums.assert_not_called()
+
+
+def test_get_artist_albums_fingerprint_mismatch_refetches(svc):
+    """Stale cached albums + inline fingerprint mismatch → full API call."""
+    import time
+    from shuffleupagus.services.youtube.model import YoutubeArtist
+
+    stale = [{"browseId": "MPL1", "title": "Old Album", "year": "2020"}]
+    svc.cache._cache["artist:UCabc:albums"] = [stale, time.time() - 3600, 60.0]
+
+    artist = YoutubeArtist("UCabc", "Band")
+    # inlineAlbums[0] has a different browseId — new release detected
+    artist.inlineAlbums = [{"browseId": "MPL2", "title": "New Album", "year": "2024"}]
+    artist.browseIds["albums"] = "MPLA"
+    artist.params["albums"] = "P"
+    svc.client.get_artist_albums.return_value = [
+        {"browseId": "MPL1", "title": "Old Album", "year": "2020"},
+        {"browseId": "MPL2", "title": "New Album", "year": "2024"},
+    ]
+
+    albums = svc.get_artist_albums(artist)
+    assert len(albums) == 2
+    svc.client.get_artist_albums.assert_called_once()
+
+
 # ---------------------------------------------------------------------------
 # get_album_tracks
 # ---------------------------------------------------------------------------
