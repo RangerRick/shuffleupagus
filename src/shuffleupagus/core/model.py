@@ -53,12 +53,14 @@ class Album(ShufObject):
         if release_date:
             if isinstance(release_date, str):
                 if "-" not in release_date:
+                    if not (release_date.isdigit() and len(release_date) == 4):
+                        raise ValueError(f"Invalid year string: {release_date!r}")
                     release_date = release_date + "-01-01"
                 self.release_date = datetime.date.fromisoformat(release_date)
             elif isinstance(release_date, datetime.date):
                 self.release_date = release_date
             else:
-                raise ValueError
+                raise ValueError(f"Invalid release_date type: {type(release_date).__name__}")
 
     def __str__(self) -> str:
         return f"Album({self.id}): {self.name}"
