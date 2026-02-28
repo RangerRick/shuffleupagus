@@ -50,7 +50,7 @@ class Album(ShufObject):
     def __init__(self, id: str, name: str, release_date=None):
         super().__init__(id, name)
 
-        if release_date:
+        if release_date is not None:
             if isinstance(release_date, str):
                 if "-" not in release_date:
                     if not (release_date.isdigit() and len(release_date) == 4):
