@@ -85,6 +85,14 @@ ignore = [
   "PERF401",# list.extend vs append in loop — existing style
 ]
 
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = [
+  "PLC0415", # local imports inside test functions — acceptable test pattern
+  "ARG005",  # unused lambda arg `self` — standard monkeypatch pattern
+  "PT011",   # pytest.raises without match — match not always meaningful
+  "PT006",   # parametrize first arg as string — minor style preference
+]
+
 [tool.ruff.format]
 quote-style = "double"
 
@@ -97,3 +105,4 @@ error-on-warning = true
 [tool.pytest.ini_options]
 addopts = "--cov=src --cov-report=term-missing"
 testpaths = ["tests"]
+pythonpath = ["src"]
