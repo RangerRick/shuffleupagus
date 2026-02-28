@@ -115,7 +115,13 @@ class Service:
     def __init__(self, config: Config):
         svc_config = config.service(self.name)
         ttl_days = svc_config.get("cache-ttl-days")
-        cutoff = float(ttl_days) * 24 * 60 * 60 if ttl_days is not None else self.cache_cutoff
+        if ttl_days is not None:
+            ttl_days = float(ttl_days)
+            if ttl_days <= 0:
+                raise ValueError(f"cache-ttl-days must be positive, got {ttl_days}")
+            cutoff = ttl_days * 24 * 60 * 60
+        else:
+            cutoff = self.cache_cutoff
         self.cache = Cache(self.name, cutoff=cutoff)
         self.config = svc_config
 
