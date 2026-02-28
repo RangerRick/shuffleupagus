@@ -176,7 +176,14 @@ class AppleMusicService(Service):
         with ThreadPoolExecutor(max_workers=8) as executor:
             futures = {executor.submit(self.get_album_tracks, album, artist): album for album in albums}
             for future in as_completed(futures):
-                tracks += future.result()
+                album = futures[future]
+                try:
+                    tracks += future.result()
+                except Exception:
+                    logger.exception(
+                        f"{self.tag}  ! error fetching tracks for album"
+                        f" '{album.name}' (artist: {artist.name}), skipping"
+                    )
 
         return tracks
 
