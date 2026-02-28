@@ -59,32 +59,36 @@ class Config:
         ret = []
         for artist_name in self.__artist_config:
             artist = self.__artist_config[artist_name]
-            if service_name in artist.get("services") and artist.get("vip", False):
-                ret.append(artist.get("services").get(service_name))
+            services = artist.get("services", {}) or {}
+            if service_name in services and artist.get("vip", False):
+                ret.append(services.get(service_name))
         return ret
 
     def service_artists(self, service_name: str) -> list:
         ret = []
         for artist_name in self.__artist_config:
             artist = self.__artist_config.get(artist_name)
-            if artist and service_name in artist.get("services", {}):
-                ret.append(artist.get("services").get(service_name))
+            if not artist:
+                continue
+            services = artist.get("services", {}) or {}
+            if service_name in services:
+                ret.append(services.get(service_name))
         return ret
 
     def excluded_albums(self, service_name: str) -> list:
         ret = []
         for artist_name in self.__artist_config:
             artist = self.__artist_config[artist_name]
-            if "exclude" in artist and service_name in artist.get("exclude"):
-                for album in artist.get("exclude").get(service_name).get("albums", []):
-                    ret.append(album)
+            excludes = (artist.get("exclude") or {}).get(service_name, {}) or {}
+            for album in excludes.get("albums", []):
+                ret.append(album)
         return ret
 
     def excluded_tracks(self, service_name: str) -> list:
         ret = []
         for artist_name in self.__artist_config:
             artist = self.__artist_config[artist_name]
-            if "exclude" in artist and service_name in artist.get("exclude"):
-                for track in artist.get("exclude").get(service_name).get("tracks", []):
-                    ret.append(track)
+            excludes = (artist.get("exclude") or {}).get(service_name, {}) or {}
+            for track in excludes.get("tracks", []):
+                ret.append(track)
         return ret
