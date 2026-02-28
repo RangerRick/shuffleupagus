@@ -21,6 +21,7 @@ class Cache:
         self._cache: dict = {}
         self._lock = threading.Lock()
         self._saving = False
+        self._save_pending = False
         self._update_count = 0
         print(f"* loading '{name}' cache", flush=True)
         self._load()
@@ -123,14 +124,25 @@ class Cache:
     def save(self):
         with self._lock:
             if self._saving:
+                self._save_pending = True
                 return
             self._saving = True
-            self._clean_locked()
-            snapshot = self._cache.copy()
 
-        try:
-            os.makedirs(os.path.dirname(self._filename()), exist_ok=True)
-            joblib.dump(snapshot, self._filename())
-        finally:
+        while True:
             with self._lock:
-                self._saving = False
+                self._save_pending = False
+                self._clean_locked()
+                snapshot = {k: v.copy() for k, v in self._cache.items()}
+
+            try:
+                os.makedirs(os.path.dirname(self._filename()), exist_ok=True)
+                joblib.dump(snapshot, self._filename())
+            except BaseException:
+                with self._lock:
+                    self._saving = False
+                raise
+
+            with self._lock:
+                if not self._save_pending:
+                    self._saving = False
+                    return

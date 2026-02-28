@@ -165,6 +165,8 @@ def test_concurrent_reads_and_writes(cache):
     for t in threads:
         t.join(timeout=10)
 
+    alive = [t for t in threads if t.is_alive()]
+    assert not alive, "Deadlock detected: threads still alive after timeout"
     assert not errors, f"Concurrent access raised: {errors}"
 
 
@@ -196,6 +198,8 @@ def test_concurrent_write_and_save(tmp_path, monkeypatch):
     for t in threads:
         t.join(timeout=10)
 
+    alive = [t for t in threads if t.is_alive()]
+    assert not alive, "Deadlock detected: threads still alive after timeout"
     assert not errors, f"Concurrent write+save raised: {errors}"
 
 
