@@ -87,12 +87,12 @@ class SpotifyService(Service):
                         latest_id = latest["items"][0]["id"]
                         cached_fp = self.cache.read_stale(fp_key)
                         if cached_fp == latest_id:
-                            logger.debug(f"* fingerprint match for {artist.name}, extending cache")
+                            logger.debug(f"{self.tag}* fingerprint match for {artist.name}, extending cache")
                             self.cache.touch(cache_key)
                             self.cache.write(fp_key, latest_id, ttl=_FINGERPRINT_TTL)
                             ret = stale
                 except Exception as e:
-                    logger.debug(f"* fingerprint check failed for {artist.id}: {e}")
+                    logger.debug(f"{self.tag}* fingerprint check failed for {artist.id}: {e}")
 
         if ret is None:
             album = self.spotify.artist_albums(artist.id)

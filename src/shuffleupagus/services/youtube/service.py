@@ -44,12 +44,12 @@ class YoutubeService(Service):
         if client_id and client_secret:
             creds = OAuthCredentials(client_id, client_secret)
             if self._load_oauth_token(auth_file) is None:
-                logger.warning("* YouTube auth token missing or not OAuth format; starting login flow")
+                logger.warning(f"{self.tag}* YouTube auth token missing or not OAuth format; starting login flow")
                 self._prompt_for_oauth(creds, auth_file)
             try:
                 self.client = YTMusic(str(auth_file), oauth_credentials=creds)
             except YTMusicServerError:
-                logger.warning("* YouTube auth token invalid; starting login flow")
+                logger.warning(f"{self.tag}* YouTube auth token invalid; starting login flow")
                 self._prompt_for_oauth(creds, auth_file)
                 self.client = YTMusic(str(auth_file), oauth_credentials=creds)
         else:
@@ -137,7 +137,7 @@ class YoutubeService(Service):
 
         artist_url = "https://www.youtube.com/" + artist if artist.startswith("@") else artist
 
-        logger.debug(f"* fetching channel ID for artist handle: {artist} (URL: {artist_url})")
+        logger.debug(f"{self.tag}* fetching channel ID for artist handle: {artist} (URL: {artist_url})")
         response = requests.get(artist_url, timeout=30)
         if response.status_code < 200 or response.status_code >= 300:
             raise ValueError(
@@ -165,7 +165,7 @@ class YoutubeService(Service):
         if handle:
             self.cache.write("channel:handle:" + channel_id, handle)
 
-        logger.debug(f"* resolved {artist} to channel ID: {channel_id} (handle: {handle})")
+        logger.debug(f"{self.tag}* resolved {artist} to channel ID: {channel_id} (handle: {handle})")
         return channel_id, handle
 
     def get_artist(self, artist: str | Artist) -> YoutubeArtist | None:
@@ -174,7 +174,7 @@ class YoutubeService(Service):
             try:
                 artist_id, handle = self.__get_channel_id(artist)
             except ValueError as e:
-                logger.warning(f"* could not resolve artist handle '{original}': {e}, skipping")
+                logger.warning(f"{self.tag}* could not resolve artist handle '{original}': {e}, skipping")
                 return None
             artist_obj = None
         else:
@@ -187,7 +187,7 @@ class YoutubeService(Service):
             raise ValueError("Artist ID is missing")
 
         cache_key = "artist:" + artist_id
-        logger.debug(f"* fetching artist info for ID: {artist_id} (cache key: {cache_key})")
+        logger.debug(f"{self.tag}* fetching artist info for ID: {artist_id} (cache key: {cache_key})")
         ret = self.cache.read(cache_key)
         if not ret:
             if artist_obj:
@@ -198,13 +198,13 @@ class YoutubeService(Service):
                 except (KeyError, YTMusicServerError) as e:
                     if "400" in str(e):
                         logger.warning(
-                            f"* {original} (channel: {artist_id}): YouTube Music API returned "
+                            f"{self.tag}* {original} (channel: {artist_id}): YouTube Music API returned "
                             f"HTTP 400 — this artist is not cached and OAuth cannot browse YT Music. "
                             f"Re-run once with browser-cookie auth to warm the cache.",
                         )
                     else:
                         logger.warning(
-                            f"* {original} has no YouTube Music page ({e}), skipping (channel: {artist_id})",
+                            f"{self.tag}* {original} has no YouTube Music page ({e}), skipping (channel: {artist_id})",
                         )
                     return None
                 self.cache.write(cache_key, ret)
@@ -232,7 +232,7 @@ class YoutubeService(Service):
         albums_browse_id = artist.browseIds.get("albums")
         albums_params = artist.params.get("albums")
 
-        logger.debug(f"* fetching albums for artist ID: {artist.id} (cache key: {cache_key})")
+        logger.debug(f"{self.tag}* fetching albums for artist ID: {artist.id} (cache key: {cache_key})")
         albums = []
 
         ret = self.cache.read(cache_key)
@@ -246,7 +246,7 @@ class YoutubeService(Service):
             if stale is not None and current_fp is not None:
                 cached_fp = self.cache.read_stale(fp_key)
                 if cached_fp == current_fp:
-                    logger.debug(f"* fingerprint match for {artist.name}, extending cache")
+                    logger.debug(f"{self.tag}* fingerprint match for {artist.name}, extending cache")
                     self.cache.touch(cache_key)
                     self.cache.write(fp_key, current_fp, ttl=_FINGERPRINT_TTL)
                     ret = stale
@@ -259,7 +259,7 @@ class YoutubeService(Service):
                 # all albums are already embedded in the get_artist response
                 ret = artist.inlineAlbums
             else:
-                logger.debug(f"* artist {artist.name} has no albums, skipping")
+                logger.debug(f"{self.tag}* artist {artist.name} has no albums, skipping")
                 return []
             self.cache.write(cache_key, ret)
             inline = artist.inlineAlbums
@@ -346,14 +346,14 @@ class YoutubeService(Service):
             if not page_token:
                 break
 
-        logger.debug(f"  * removing {len(existing_item_ids)} existing items from playlist")
+        logger.debug(f"{self.tag}  * removing {len(existing_item_ids)} existing items from playlist")
         for item_id in existing_item_ids:
             self._data_api_delete(
                 "https://www.googleapis.com/youtube/v3/playlistItems",
                 params={"id": item_id},
             )
 
-        logger.debug(f"  * adding {len(tracks or [])} new items to playlist")
+        logger.debug(f"{self.tag}  * adding {len(tracks or [])} new items to playlist")
         for video_id in tracks or []:
             self._data_api_post(
                 "https://www.googleapis.com/youtube/v3/playlistItems",

@@ -19,6 +19,7 @@ def svc(tmp_path, monkeypatch):
     s.cache = Cache("youtube", autosave=False)
     s.config = {}
     s.client = MagicMock()
+    s.tag = "[youtube] "
     return s
 
 

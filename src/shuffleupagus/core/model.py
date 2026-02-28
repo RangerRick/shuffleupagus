@@ -6,7 +6,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from .cache import CACHE_DEFAULT_CUTOFF, Cache
 from .config import Config
-from .util import logger, spread_artist_playlists
+from .util import logger, service_tag, spread_artist_playlists
 
 MAX_TOP_TRACKS = 5
 MAX_ARTIST_TRACKS = 10
@@ -126,6 +126,7 @@ class Service:
             cutoff = self.cache_cutoff
         self.cache = Cache(self.name, cutoff=cutoff)
         self.config = svc_config
+        self.tag = service_tag(self.name)
 
     def sanitize_id(self, id: str) -> str:
         return id
@@ -173,10 +174,11 @@ class Service:
 
         def _process(idx: int, artist_id: str) -> tuple[str, list[Track]]:
             artist = self.get_artist(artist_id)
+            tag = self.tag
             if artist is None:
-                logger.warning(f"  ! artist {artist_id} not found, skipping")
+                logger.warning(f"{tag}  ! artist {artist_id} not found, skipping")
                 return artist_id, []
-            logger.info(f"* processing artist {artist.name} ({idx + 1}/{total})")
+            logger.info(f"{tag}* processing artist {artist.name} ({idx + 1}/{total})")
 
             top_tracks = self.get_artist_top_tracks(artist)
             top_tracks = [
@@ -217,7 +219,7 @@ class Service:
             random.shuffle(deduped)
             playlist = top_tracks[0:MAX_TOP_TRACKS] + deduped + top_tracks[MAX_TOP_TRACKS:-1]
             playlist = playlist[0 : MAX_TOP_TRACKS + MAX_ARTIST_TRACKS]
-            logger.info(f"  * found {len(playlist)} valid tracks for {artist.name}")
+            logger.info(f"{tag}  * found {len(playlist)} valid tracks for {artist.name}")
             random.shuffle(playlist)
             return artist_id, playlist
 
@@ -231,7 +233,7 @@ class Service:
                     a_id, playlist = future.result()
                     artist_playlists[a_id] = playlist
                 except Exception:
-                    logger.exception(f"  ! failed to process artist {artist_id}, skipping")
+                    logger.exception(f"{self.tag}  ! failed to process artist {artist_id}, skipping")
 
         return spread_artist_playlists(artist_playlists, _vip_artist_ids)
 

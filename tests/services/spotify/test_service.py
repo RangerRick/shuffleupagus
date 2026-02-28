@@ -41,6 +41,7 @@ def svc(tmp_path, monkeypatch):
     svc.cache = Cache("spotify", autosave=False)
     svc.config = {}
     svc.spotify = MagicMock()
+    svc.tag = "[spotify] "
     return svc
 
 

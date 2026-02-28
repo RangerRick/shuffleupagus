@@ -48,6 +48,7 @@ def svc(tmp_path, monkeypatch):
     s.client = MagicMock()
     s.client.proxies = {}
     s.client.session_length = 30
+    s.tag = "[apple] "
     return s
 
 

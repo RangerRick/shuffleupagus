@@ -58,7 +58,7 @@ class AppleMusicService(Service):
                     ret = artist_obj
                     self.cache.write(cache_key, ret)
             except Exception as e:
-                logger.error(f"  ! error fetching artist: {e}")
+                logger.error(f"{self.tag}  ! error fetching artist: {e}")
 
         if ret is not None and ret["data"] and len(ret["data"]) > 0:
             return AppleMusicArtist.from_dict(ret["data"][0])
@@ -78,7 +78,7 @@ class AppleMusicService(Service):
                     ret = album_obj
                     self.cache.write(cache_key, ret)
             except Exception as e:
-                logger.error(f"  ! error fetching album: {e}")
+                logger.error(f"{self.tag}  ! error fetching album: {e}")
 
         if ret is not None and ret["data"] and len(ret["data"]) > 0:
             return AppleMusicAlbum.from_dict(ret["data"][0])
@@ -97,7 +97,7 @@ class AppleMusicService(Service):
                     ret = albums
                     self.cache.write(cache_key, ret)
             except Exception as e:
-                logger.error(f"  ! error fetching artist albums: {e}")
+                logger.error(f"{self.tag}  ! error fetching artist albums: {e}")
 
         if ret is None or "data" not in ret or len(ret["data"]) == 0:
             return []
@@ -119,7 +119,7 @@ class AppleMusicService(Service):
                     ret = track_obj
                     self.cache.write(cache_key, ret)
             except Exception as e:
-                logger.error(f"  ! error fetching track: {e}")
+                logger.error(f"{self.tag}  ! error fetching track: {e}")
 
         if ret is not None and ret["data"] and len(ret["data"]) > 0:
             track_obj = ret["data"][0]
@@ -151,7 +151,7 @@ class AppleMusicService(Service):
                     ret = album_tracks
                     self.cache.write(cache_key, ret)
             except Exception as e:
-                logger.error(f"  ! error fetching album tracks: {e}")
+                logger.error(f"{self.tag}  ! error fetching album tracks: {e}")
 
         if ret is None or "data" not in ret or len(ret["data"]) == 0:
             return []
@@ -191,7 +191,7 @@ class AppleMusicService(Service):
                     ret = top_tracks
                 self.cache.write(cache_key, ret)
             except Exception as e:
-                logger.error(f"  ! error fetching top tracks: {e}")
+                logger.error(f"{self.tag}  ! error fetching top tracks: {e}")
 
         if ret is None or "data" not in ret or len(ret["data"]) == 0:
             return []
@@ -228,9 +228,9 @@ class AppleMusicService(Service):
                     if "code" in r.json()["errors"][0] and r.json()["errors"][0]["code"] == "40403":
                         return 0
 
-                logger.error(f"  ! error fetching playlist: {r.status_code} {r.reason}")
+                logger.error(f"{self.tag}  ! error fetching playlist: {r.status_code} {r.reason}")
                 if len(r.text.strip()) > 0:
-                    logger.error(r.text)
+                    logger.error(f"{self.tag}{r.text}")
         raise Exception("Failed to fetch playlist length after 3 retries")
 
     def get_playlist_id_for_name(self, playlist_name: str) -> str:
@@ -250,20 +250,20 @@ class AppleMusicService(Service):
                         if attrs.get("name") == playlist_name:
                             return playlist["id"]
             else:
-                logger.error(f"  ! error fetching playlists: {r.status_code} {r.reason}")
+                logger.error(f"{self.tag}  ! error fetching playlists: {r.status_code} {r.reason}")
                 if len(r.text.strip()) > 0:
-                    logger.error(r.text)
+                    logger.error(f"{self.tag}{r.text}")
 
         raise Exception(f"Failed to fetch playlist ID for {playlist_name} after 3 retries")
 
     def sync(self, playlist_name: str, tracks: list[str] | None = None):
         apple_tracks = list(map(lambda track: {"id": track, "type": "songs"}, tracks or []))
 
-        logger.info(f"  * determining playlist id for {playlist_name}")
+        logger.info(f"{self.tag}  * determining playlist id for {playlist_name}")
         playlist_id = self.get_playlist_id_for_name(playlist_name)
         url = f"https://api.music.apple.com/v1/me/library/playlists/{playlist_id}"
 
-        logger.info(f"  * clearing existing tracks in playlist '{playlist_name}'")
+        logger.info(f"{self.tag}  * clearing existing tracks in playlist '{playlist_name}'")
 
         # Clear existing tracks in the playlist
         scpt = applescript.AppleScript(
@@ -279,16 +279,16 @@ class AppleMusicService(Service):
         )
         scpt.run()
 
-        logger.info("  * waiting for Music.app to process the deletion")
+        logger.info(f"{self.tag}  * waiting for Music.app to process the deletion")
         count = self.__get_playlist_length(playlist_id)
         while count > 0:
             time.sleep(2)
             count = self.__get_playlist_length(playlist_id)
-            logger.info(f"    * {count} track(s) remaining...")
+            logger.info(f"{self.tag}    * {count} track(s) remaining...")
 
         playlist_tracks = copy.deepcopy(apple_tracks)
 
-        logger.info(f"  * publishing {len(playlist_tracks)} songs to the playlist")
+        logger.info(f"{self.tag}  * publishing {len(playlist_tracks)} songs to the playlist")
         while len(playlist_tracks) > 0:
             # Apple Music API allows a maximum of 100 tracks per request, do 80 just in case
             batch = playlist_tracks[0:80]
@@ -309,8 +309,8 @@ class AppleMusicService(Service):
                 if r.status_code >= 200 and r.status_code < 300:
                     break
 
-                logger.warning(f"{r.status_code} {r.reason}")
+                logger.warning(f"{self.tag}{r.status_code} {r.reason}")
                 if len(r.text.strip()) > 0:
-                    logger.warning(r.text)
+                    logger.warning(f"{self.tag}{r.text}")
                 if retries == 0:
                     raise Exception("Failed to add tracks to playlist after 3 retries")

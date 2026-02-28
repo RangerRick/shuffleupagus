@@ -125,6 +125,8 @@ def _track(id, name="T", duration_ms=120_000, album_id="alb1"):
 class _StubService:
     """Minimal Service-like object that calls generate_playlist directly."""
 
+    tag = "[test] "
+
     def get_artist(self, artist):
         return Artist(artist, artist)
 

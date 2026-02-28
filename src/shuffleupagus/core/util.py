@@ -1,5 +1,6 @@
 import importlib
 import logging
+import os
 import pkgutil
 import random
 
@@ -11,6 +12,29 @@ logger = logging.getLogger("root")
 logging.getLogger("urllib3").setLevel(logging.FATAL)
 logging.getLogger("spotipy").setLevel(logging.FATAL)
 logging.getLogger("spotipy.client").setLevel(logging.FATAL)
+
+# Nerd Font brand icons (requires a patched font)
+_NERD_FONT_TAGS: dict[str, str] = {
+    "appleMusic": "\uf179 ",  # nf-fa-apple
+    "spotify": "\uf1bc ",  # nf-fa-spotify
+    "youtube": "\uf167 ",  # nf-fa-youtube
+}
+
+_PLAIN_TAGS: dict[str, str] = {
+    "appleMusic": "[apple] ",
+    "spotify": "[spotify] ",
+    "youtube": "[youtube] ",
+}
+
+
+def _use_nerd_fonts() -> bool:
+    return os.environ.get("NERD_FONTS", "").lower() in ("1", "true", "yes")
+
+
+def service_tag(name: str) -> str:
+    """Return a short prefix tag for the given service name."""
+    tags = _NERD_FONT_TAGS if _use_nerd_fonts() else _PLAIN_TAGS
+    return tags.get(name, f"[{name}] ")
 
 
 def init_logging(level: str):
