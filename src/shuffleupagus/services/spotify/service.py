@@ -99,6 +99,7 @@ class SpotifyService(Service):
             if album is not None and "items" in album:
                 ret = album["items"]
             self.cache.write(cache_key, ret if ret is not None else [])
+            # Spotify returns albums newest-first; ret[0] is the latest release.
             if ret:
                 self.cache.write(fp_key, ret[0]["id"], ttl=_FINGERPRINT_TTL)
 
