@@ -5,7 +5,12 @@ import spotipy
 from spotipy.oauth2 import SpotifyOAuth
 
 from ...core.model import Album, Artist, Service, Track
+from ...core.util import logger
 from .model import SpotifyAlbum, SpotifyArtist, SpotifyTrack, sanitize_id
+
+# Fingerprint TTL: how long before we re-check whether a new album has been released.
+# Short enough to catch new releases, long enough to avoid hammering the API every run.
+_FINGERPRINT_TTL = 60 * 60 * 24  # 24 hours
 
 
 class SpotifyService(Service):
@@ -63,13 +68,33 @@ class SpotifyService(Service):
 
     def get_artist_albums(self, artist: Artist) -> list[Album]:
         cache_key = "artist:" + artist.id + ":albums"
+        fp_key = "fingerprint:artist:" + artist.id
 
         ret = self.cache.read(cache_key)
+        if not ret:
+            # Cache miss — check fingerprint before doing a full catalog fetch.
+            stale = self.cache.read_stale(cache_key)
+            if stale:
+                try:
+                    latest = self.spotify.artist_albums(artist.id, limit=1)
+                    if latest and "items" in latest and latest["items"]:
+                        latest_id = latest["items"][0]["id"]
+                        cached_fp = self.cache.read_stale(fp_key)
+                        if cached_fp == latest_id:
+                            logger.debug(f"* fingerprint match for {artist.name}, extending cache")
+                            self.cache.touch(cache_key)
+                            self.cache.write(fp_key, latest_id, ttl=_FINGERPRINT_TTL)
+                            ret = stale
+                except Exception as e:
+                    logger.debug(f"* fingerprint check failed for {artist.id}: {e}")
+
         if not ret:
             album = self.spotify.artist_albums(artist.id)
             if album is not None and "items" in album:
                 ret = album["items"]
             self.cache.write(cache_key, ret)
+            if ret:
+                self.cache.write(fp_key, ret[0]["id"], ttl=_FINGERPRINT_TTL)
 
         albums = []
         if ret:

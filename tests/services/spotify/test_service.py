@@ -107,6 +107,52 @@ def test_get_artist_albums_empty(svc):
     assert albums == []
 
 
+def test_get_artist_albums_fingerprint_match_uses_stale(svc):
+    """Stale cached albums + matching fingerprint → skip full refetch."""
+    import time
+    from shuffleupagus.core.model import Artist
+
+    stale_albums = [_album_payload("alb1", "Old Album")]
+    # Inject expired albums entry and its fingerprint
+    svc.cache._cache["artist:a1:albums"] = [stale_albums, time.time() - 3600, 60.0]
+    svc.cache._cache["fingerprint:artist:a1"] = ["alb1", time.time() - 1800, 86400.0]
+    # API confirms latest album is still alb1
+    svc.spotify.artist_albums.return_value = {"items": [_album_payload("alb1")]}
+
+    albums = svc.get_artist_albums(Artist("a1", "A"))
+    assert len(albums) == 1
+    # Only one call (limit=1 fingerprint check), not the full refetch
+    svc.spotify.artist_albums.assert_called_once_with("a1", limit=1)
+
+
+def test_get_artist_albums_fingerprint_mismatch_refetches(svc):
+    """Stale cached albums + fingerprint mismatch → full refetch."""
+    import time
+    from shuffleupagus.core.model import Artist
+
+    stale_albums = [_album_payload("alb1", "Old Album")]
+    svc.cache._cache["artist:a1:albums"] = [stale_albums, time.time() - 3600, 60.0]
+    # Latest album is different from what's cached
+    svc.spotify.artist_albums.side_effect = [
+        {"items": [_album_payload("alb2", "New Album")]},  # fingerprint check
+        {"items": [_album_payload("alb1"), _album_payload("alb2")]},  # full refetch
+    ]
+
+    albums = svc.get_artist_albums(Artist("a1", "A"))
+    assert len(albums) == 2
+    assert svc.spotify.artist_albums.call_count == 2
+
+
+def test_get_artist_albums_stores_fingerprint(svc):
+    """After a full fetch, the fingerprint is stored in the cache."""
+    from shuffleupagus.core.model import Artist
+
+    svc.spotify.artist_albums.return_value = {"items": [_album_payload("alb1", "Album")]}
+    svc.get_artist_albums(Artist("a1", "A"))
+
+    assert svc.cache.read_stale("fingerprint:artist:a1") == "alb1"
+
+
 # ---------------------------------------------------------------------------
 # get_album_tracks
 # ---------------------------------------------------------------------------

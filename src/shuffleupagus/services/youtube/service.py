@@ -13,6 +13,9 @@ from ...core.model import Album, Artist, Service, Track
 from ...core.util import logger
 from .model import YoutubeAlbum, YoutubeArtist, YoutubeTrack
 
+# Fingerprint TTL: how often to re-check whether a new album has appeared.
+_FINGERPRINT_TTL = 60 * 60 * 24  # 24 hours
+
 channelUrl = re.compile(
     r'^.*<link rel="canonical" href="https://www\.youtube\.com/channel/([^\"]+)".*$',
     re.MULTILINE | re.DOTALL,
@@ -217,6 +220,7 @@ class YoutubeService(Service):
 
     def get_artist_albums(self, artist: Artist) -> list[Album]:
         cache_key = "artist:" + artist.id + ":albums"
+        fp_key = "fingerprint:artist:" + artist.id
 
         assert isinstance(artist, YoutubeArtist)
         albums_browse_id = artist.browseIds.get("albums")
@@ -226,6 +230,21 @@ class YoutubeService(Service):
         albums = []
 
         ret = self.cache.read(cache_key)
+        if not ret:
+            # Derive the current "latest album" fingerprint from the get_artist response,
+            # which is already in memory — no extra API call required.
+            inline = artist.inlineAlbums
+            current_fp = inline[0]["browseId"] if inline else None
+
+            stale = self.cache.read_stale(cache_key)
+            if stale and current_fp is not None:
+                cached_fp = self.cache.read_stale(fp_key)
+                if cached_fp == current_fp:
+                    logger.debug(f"* fingerprint match for {artist.name}, extending cache")
+                    self.cache.touch(cache_key)
+                    self.cache.write(fp_key, current_fp, ttl=_FINGERPRINT_TTL)
+                    ret = stale
+
         if not ret:
             if albums_browse_id is not None and albums_params is not None:
                 # artist has a paginated album list; fetch all
@@ -237,6 +256,9 @@ class YoutubeService(Service):
                 logger.debug(f"* artist {artist.name} has no albums, skipping")
                 return []
             self.cache.write(cache_key, ret)
+            inline = artist.inlineAlbums
+            if inline:
+                self.cache.write(fp_key, inline[0]["browseId"], ttl=_FINGERPRINT_TTL)
 
         if ret and len(ret) > 0:
             for album in ret:
