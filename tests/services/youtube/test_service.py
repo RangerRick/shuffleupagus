@@ -1,0 +1,279 @@
+"""Tests for YoutubeService with all network/ytmusicapi calls mocked."""
+from unittest.mock import MagicMock, patch
+
+import pytest
+
+from shuffleupagus.core.cache import Cache
+from shuffleupagus.services.youtube.service import YoutubeService
+
+# ---------------------------------------------------------------------------
+# Fixtures
+# ---------------------------------------------------------------------------
+
+@pytest.fixture
+def svc(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        Cache, "_filename", lambda self: str(tmp_path / f"{self.name}.joblib.gz")
+    )
+    s = YoutubeService.__new__(YoutubeService)
+    s.cache = Cache("youtube", autosave=False)
+    s.config = {}
+    s.client = MagicMock()
+    return s
+
+
+# ---------------------------------------------------------------------------
+# sanitize_id
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize("raw, expected", [
+    ("UCabc", "UCabc"),
+    ("@handle", "@handle"),
+    ("https://www.youtube.com/channel/UCabc", "UCabc"),
+    ("https://www.youtube.com/@myband", "@myband"),
+    ("youtube.com/channel/UCabc", "UCabc"),
+    ("youtube.com/@myband", "@myband"),
+    ("www.youtube.com/channel/UCabc?si=x", "UCabc"),
+])
+def test_sanitize_id(svc, raw, expected):
+    assert svc.sanitize_id(raw) == expected
+
+
+# ---------------------------------------------------------------------------
+# __get_channel_id (via get_artist to avoid name-mangling in tests)
+# ---------------------------------------------------------------------------
+
+def test_get_channel_id_bare_id_no_fetch(svc):
+    """Bare channel IDs skip the HTTP request entirely."""
+    with patch("shuffleupagus.services.youtube.service.requests.get") as mock_get:
+        svc.client.get_artist.return_value = {"channelId": "UCabc", "name": "Band"}
+        svc.get_artist("UCabc")
+        mock_get.assert_not_called()
+
+
+def test_get_channel_id_cached(svc):
+    svc.cache.write("channel:@band", "UCabc")
+    svc.cache.write("channel:handle:UCabc", "@band")
+    with patch("shuffleupagus.services.youtube.service.requests.get") as mock_get:
+        svc.client.get_artist.return_value = {"channelId": "UCabc", "name": "Band"}
+        svc.get_artist("@band")
+        mock_get.assert_not_called()
+
+
+def test_get_channel_id_fetches_handle_page(svc):
+    html = (
+        '<html><link rel="canonical" href="https://www.youtube.com/channel/UCabc">'
+        '"canonicalBaseUrl":"/@theband"</html>'
+    )
+    mock_resp = MagicMock()
+    mock_resp.status_code = 200
+    mock_resp.text = html
+    with patch("shuffleupagus.services.youtube.service.requests.get", return_value=mock_resp):
+        svc.client.get_artist.return_value = {"channelId": "UCabc", "name": "Band"}
+        artist = svc.get_artist("@theband")
+    assert artist.id == "UCabc"
+    assert artist.handle == "@theband"
+    assert svc.cache.read("channel:@theband") == "UCabc"
+    assert svc.cache.read("channel:handle:UCabc") == "@theband"
+
+
+def test_get_channel_id_extracts_handle_from_html(svc):
+    # URL with @handle gets sanitized to "@newband"; handle is set from the input,
+    # not from canonicalBaseUrl (which only fires when there's no @-prefixed input).
+    html = (
+        '<html>"browseId":"UCxyz"'
+        '"canonicalBaseUrl":"/@newband"</html>'
+    )
+    mock_resp = MagicMock()
+    mock_resp.status_code = 200
+    mock_resp.text = html
+    with patch("shuffleupagus.services.youtube.service.requests.get", return_value=mock_resp):
+        svc.client.get_artist.return_value = {"channelId": "UCxyz", "name": "New Band"}
+        artist = svc.get_artist("https://www.youtube.com/@newband")
+    assert artist.handle == "@newband"
+
+
+def test_get_channel_id_http_error_logs_and_returns_placeholder(svc):
+    # HTTP errors are caught; get_artist returns a placeholder instead of raising.
+    mock_resp = MagicMock()
+    mock_resp.status_code = 404
+    mock_resp.text = "Not Found"
+    with patch("shuffleupagus.services.youtube.service.requests.get", return_value=mock_resp):
+        artist = svc.get_artist("@missing")
+    assert artist.id == "@missing"
+    assert artist.name == "@missing"
+
+
+def test_get_channel_id_not_found_in_html_returns_placeholder(svc):
+    # Missing channel ID in page is caught; get_artist returns a placeholder.
+    mock_resp = MagicMock()
+    mock_resp.status_code = 200
+    mock_resp.text = "<html>no channel info here</html>"
+    with patch("shuffleupagus.services.youtube.service.requests.get", return_value=mock_resp):
+        artist = svc.get_artist("@unknown")
+    assert artist.id == "@unknown"
+    assert artist.name == "@unknown"
+
+
+# ---------------------------------------------------------------------------
+# get_artist
+# ---------------------------------------------------------------------------
+
+def test_get_artist_cache_hit(svc):
+    svc.cache.write("channel:@band", "UCabc")
+    svc.cache.write("artist:UCabc", {"channelId": "UCabc", "name": "Cached Band"})
+    artist = svc.get_artist("@band")
+    assert artist.name == "Cached Band"
+    svc.client.get_artist.assert_not_called()
+
+
+def test_get_artist_no_yt_music_page_fallback(svc):
+    from ytmusicapi.exceptions import YTMusicServerError
+    svc.client.get_artist.side_effect = YTMusicServerError("500")
+    svc.cache.write("channel:@ghost", "UCghost")
+    artist = svc.get_artist("@ghost")
+    assert artist.id == "UCghost"
+    assert artist.name == "@ghost"
+
+
+def test_get_artist_400_logs_oauth_warning(svc, caplog):
+    from ytmusicapi.exceptions import YTMusicServerError
+    svc.client.get_artist.side_effect = YTMusicServerError("400 Bad Request")
+    svc.cache.write("channel:@oauth", "UCoauth")
+    import logging
+    with caplog.at_level(logging.WARNING):
+        svc.get_artist("@oauth")
+    assert "400" in caplog.text or "OAuth" in caplog.text
+
+
+def test_get_artist_resolution_failure_returns_placeholder(svc):
+    mock_resp = MagicMock()
+    mock_resp.status_code = 404
+    with patch("shuffleupagus.services.youtube.service.requests.get", return_value=mock_resp):
+        artist = svc.get_artist("@nope")
+    assert artist.id == "@nope"
+    assert artist.name == "@nope"
+
+
+# ---------------------------------------------------------------------------
+# get_artist_albums
+# ---------------------------------------------------------------------------
+
+def test_get_artist_albums_with_browse_id(svc):
+    from shuffleupagus.services.youtube.model import YoutubeArtist
+    artist = YoutubeArtist("UCabc", "Band")
+    artist.browseIds["albums"] = "MPLA123"
+    artist.params["albums"] = "PQ=="
+    svc.client.get_artist_albums.return_value = [
+        {"browseId": "MPL1", "title": "Album 1", "year": "2020"},
+        {"browseId": "MPL2", "title": "Album 2", "year": "2021"},
+    ]
+    albums = svc.get_artist_albums(artist)
+    assert len(albums) == 2
+    svc.client.get_artist_albums.assert_called_once_with("MPLA123", "PQ==", limit=100)
+
+
+def test_get_artist_albums_inline(svc):
+    from shuffleupagus.services.youtube.model import YoutubeArtist
+    artist = YoutubeArtist("UCabc", "Band")
+    artist.inlineAlbums = [{"browseId": "MPL1", "title": "Inline Album", "year": "2019"}]
+    albums = svc.get_artist_albums(artist)
+    assert len(albums) == 1
+    assert albums[0].name == "Inline Album"
+
+
+def test_get_artist_albums_none(svc):
+    from shuffleupagus.services.youtube.model import YoutubeArtist
+    artist = YoutubeArtist("UCabc", "Band")
+    albums = svc.get_artist_albums(artist)
+    assert albums == []
+
+
+def test_get_artist_albums_cache_hit(svc):
+    from shuffleupagus.services.youtube.model import YoutubeArtist
+    artist = YoutubeArtist("UCabc", "Band")
+    artist.browseIds["albums"] = "MPLA"
+    artist.params["albums"] = "P"
+    svc.cache.write("artist:UCabc:albums", [{"browseId": "MPL1", "title": "Cached", "year": "2020"}])
+    albums = svc.get_artist_albums(artist)
+    assert len(albums) == 1
+    svc.client.get_artist_albums.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# get_album_tracks
+# ---------------------------------------------------------------------------
+
+def test_get_album_tracks(svc):
+    from shuffleupagus.core.model import Album
+    album = Album("MPL1", "Album 1")
+    svc.client.get_album.return_value = {
+        "tracks": [
+            {"videoId": "vid1", "title": "Song 1", "duration_seconds": 200, "artists": []},
+            {"videoId": "vid2", "title": "Song 2", "duration_seconds": 180, "artists": []},
+        ]
+    }
+    tracks = svc.get_album_tracks(album)
+    assert len(tracks) == 2
+    assert tracks[0].id == "vid1"
+    assert tracks[0].duration_ms == 200_000
+
+
+def test_get_album_tracks_cache_hit(svc):
+    from shuffleupagus.core.model import Album
+    album = Album("MPL1", "Album")
+    svc.cache.write("album:MPL1", {
+        "tracks": [{"videoId": "v1", "title": "T", "duration_seconds": 100, "artists": []}]
+    })
+    tracks = svc.get_album_tracks(album)
+    assert len(tracks) == 1
+    svc.client.get_album.assert_not_called()
+
+
+def test_get_album_tracks_empty(svc):
+    from shuffleupagus.core.model import Album
+    svc.client.get_album.return_value = {"tracks": []}
+    tracks = svc.get_album_tracks(Album("MPL1", "A"))
+    assert tracks == []
+
+
+# ---------------------------------------------------------------------------
+# get_playlist_id_for_name / sync
+# ---------------------------------------------------------------------------
+
+def test_get_playlist_id_found(svc):
+    svc._data_api_get = MagicMock(return_value={
+        "items": [
+            {"id": "pl1", "snippet": {"title": "My YT Playlist"}},
+            {"id": "pl2", "snippet": {"title": "Other"}},
+        ]
+    })
+    assert svc.get_playlist_id_for_name("My YT Playlist") == "pl1"
+
+
+def test_get_playlist_id_not_found(svc):
+    svc._data_api_get = MagicMock(return_value={"items": []})
+    with pytest.raises(ValueError, match="not found"):
+        svc.get_playlist_id_for_name("Missing")
+
+
+def test_get_playlist_id_paginates(svc):
+    svc._data_api_get = MagicMock(side_effect=[
+        {"items": [{"id": "pl1", "snippet": {"title": "Other"}}], "nextPageToken": "tok"},
+        {"items": [{"id": "pl2", "snippet": {"title": "Target"}}]},
+    ])
+    assert svc.get_playlist_id_for_name("Target") == "pl2"
+
+
+def test_sync_deletes_and_inserts(svc):
+    svc.get_playlist_id_for_name = MagicMock(return_value="pl1")
+    svc._data_api_get = MagicMock(return_value={
+        "items": [{"id": "item1"}, {"id": "item2"}]
+    })
+    svc._data_api_delete = MagicMock()
+    svc._data_api_post = MagicMock()
+
+    svc.sync("Playlist", ["vid1", "vid2", "vid3"])
+
+    assert svc._data_api_delete.call_count == 2
+    assert svc._data_api_post.call_count == 3

@@ -13,13 +13,13 @@ class Cache:
     name: str
     cutoff: float
     autosave: bool
-    _cache = {}
-    _update_count = 0
 
     def __init__(self, name: str, cutoff: float = CACHE_DEFAULT_CUTOFF, autosave: bool = True):
         self.name = name
         self.cutoff = cutoff
         self.autosave = autosave
+        self._cache: dict = {}
+        self._update_count = 0
         print(f"* loading '{name}' cache", flush=True)
         self._load()
         print(f"  * cleaning expired cache entries out of '{name}'", flush=True)
