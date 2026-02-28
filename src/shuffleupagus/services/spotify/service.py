@@ -194,10 +194,10 @@ class SpotifyService(Service):
             offset += 50
         raise ValueError(f"Playlist not found: {playlist_name}")
 
-    def sync(self, playlist_name: str, tracks: list[str] = []):
+    def sync(self, playlist_name: str, tracks: list[str] | None = None):
         playlist_id = self.get_playlist_id_for_name(playlist_name)
 
-        playlist_tracks = copy.deepcopy(tracks)
+        playlist_tracks = copy.deepcopy(tracks or [])
         self.spotify.playlist_replace_items(playlist_id, playlist_tracks[0:80])
         del playlist_tracks[0:80]
         while len(playlist_tracks) > 0:

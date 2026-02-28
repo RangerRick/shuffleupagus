@@ -71,7 +71,7 @@ class Track(ShufObject):
     duration_ms = 0
     isrc: str | None = None
     album: Album | None = None
-    artists: list[Artist] = []
+    artists: list[Artist]
     dedupe_hash = None
 
     def __init__(
@@ -81,13 +81,13 @@ class Track(ShufObject):
         duration_ms: int,
         isrc: str | None = None,
         album: Album | None = None,
-        artists: list[Artist] = [],
+        artists: list[Artist] | None = None,
     ):
         super().__init__(id, name)
         self.duration_ms = duration_ms
         self.isrc = isrc
         self.album = album
-        self.artists = artists
+        self.artists = list(artists) if artists else []
 
         # create a dedupe hash based on name and duration rounded to nearest second
         cleaned_name = unicodedata.normalize("NFKD", name).casefold().strip()
@@ -222,5 +222,5 @@ class Service:
 
         return spread_artist_playlists(artist_playlists, _vip_artist_ids)
 
-    def sync(self, playlist_name: str, tracks: list[str] = []) -> None:
+    def sync(self, playlist_name: str, tracks: list[str] | None = None) -> None:
         raise NotImplementedError

@@ -248,8 +248,8 @@ class AppleMusicService(Service):
 
         raise Exception(f"Failed to fetch playlist ID for {playlist_name} after 3 retries")
 
-    def sync(self, playlist_name: str, tracks: list[str] = []):
-        apple_tracks = list(map(lambda track: {"id": track, "type": "songs"}, tracks))
+    def sync(self, playlist_name: str, tracks: list[str] | None = None):
+        apple_tracks = list(map(lambda track: {"id": track, "type": "songs"}, tracks or []))
 
         logger.info(f"  * determining playlist id for {playlist_name}")
         playlist_id = self.get_playlist_id_for_name(playlist_name)

@@ -322,7 +322,7 @@ class YoutubeService(Service):
                 break
         raise ValueError(f"Playlist not found: {playlist_name}")
 
-    def sync(self, playlist_name: str, tracks: list[str] = []):
+    def sync(self, playlist_name: str, tracks: list[str] | None = None):
         playlist_id = self.get_playlist_id_for_name(playlist_name)
 
         # Fetch existing playlist items via Data API v3
@@ -345,8 +345,8 @@ class YoutubeService(Service):
                 params={"id": item_id},
             )
 
-        logger.debug(f"  * adding {len(tracks)} new items to playlist")
-        for video_id in tracks:
+        logger.debug(f"  * adding {len(tracks or [])} new items to playlist")
+        for video_id in tracks or []:
             self._data_api_post(
                 "https://www.googleapis.com/youtube/v3/playlistItems",
                 params={"part": "snippet"},
