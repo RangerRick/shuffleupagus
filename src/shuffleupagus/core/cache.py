@@ -1,4 +1,3 @@
-import copy
 import os
 import random
 import threading
@@ -36,9 +35,8 @@ class Cache:
         count = 0
         now = time.time()
         with self._lock:
-            temp_cache = copy.deepcopy(self._cache)
-            for key in temp_cache:
-                entry = temp_cache[key]
+            for key in list(self._cache.keys()):
+                entry = self._cache[key]
                 stored_at = entry[1]
                 key_ttl = entry[2] if len(entry) > 2 else self.cutoff
                 jitter = key_ttl * random.randrange(80, 120) / 100.0

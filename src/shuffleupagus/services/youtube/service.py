@@ -206,7 +206,7 @@ class YoutubeService(Service):
                         logger.warning(
                             f"* {original} has no YouTube Music page ({e}), skipping (channel: {artist_id})",
                         )
-                    return YoutubeArtist(artist_id, original, handle=handle)
+                    return None
                 self.cache.write(cache_key, ret)
 
         ya = YoutubeArtist.from_dict(ret)
