@@ -2,7 +2,7 @@
 name = "shuffleupagus"
 version = "1.1.0"
 description = "generate and synchronize smart, balanced playlists"
-requires-python = ">=3.13"
+requires-python = ">=3.14"
 
 dependencies = [
   "colorama                 >= 0.4.6",
@@ -98,7 +98,7 @@ ignore = [
 quote-style = "double"
 
 [tool.ty.environment]
-python-version = "3.13"
+python-version = "3.14"
 
 [tool.ty.terminal]
 error-on-warning = true

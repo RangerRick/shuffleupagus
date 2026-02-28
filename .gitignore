@@ -8,6 +8,8 @@ coverage.xml
 __pycache__
 *.pyc
 *.egg-info
+.coverage
+.hypothesis/
 
 .sw[opqrs]
 .*.sw[opqrs]
