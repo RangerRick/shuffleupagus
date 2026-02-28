@@ -1,20 +1,22 @@
 import copy
-import joblib
 import os
 import random
 import time
 
-CACHE_DEFAULT_CUTOFF = 60 * 60 * 24 * 7 * 1.0 # yits-been
+import joblib
+
+CACHE_DEFAULT_CUTOFF = 60 * 60 * 24 * 7 * 1.0  # yits-been
 CACHE_AUTOSAVE_LIMIT = 50
 
+
 class Cache:
-    name:str
-    cutoff:float
-    autosave:bool
+    name: str
+    cutoff: float
+    autosave: bool
     _cache = {}
     _update_count = 0
 
-    def __init__(self, name:str, cutoff:float=CACHE_DEFAULT_CUTOFF, autosave:bool=True):
+    def __init__(self, name: str, cutoff: float = CACHE_DEFAULT_CUTOFF, autosave: bool = True):
         self.name = name
         self.cutoff = cutoff
         self.autosave = autosave
@@ -33,21 +35,21 @@ class Cache:
 
     def _clean(self):
         count = 0
+        now = time.time()
         temp_cache = copy.deepcopy(self._cache)
-        for id in temp_cache:
+        for key in temp_cache:
             cutoff = self.cutoff * random.randrange(80, 120) / 100.0
-            if temp_cache[id][1] < cutoff:
-                # print(f"id {id} is older than the cutoff; deleting", flush=True)
-                del self._cache[id]
+            if now - temp_cache[key][1] > cutoff:
+                del self._cache[key]
                 count += 1
         return count
 
-    def read(self, key:str):
+    def read(self, key: str):
         if key in self._cache:
             return self._cache[key][0]
         return None
 
-    def write(self, key:str, obj):
+    def write(self, key: str, obj):
         self._cache[key] = [obj, time.time()]
 
         # logger.debug(f"* writing {self.name} cache entry: '{key}'")

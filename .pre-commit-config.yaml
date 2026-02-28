@@ -1,0 +1,23 @@
+repos:
+  - repo: local
+    hooks:
+      - id: ruff-check
+        name: ruff check
+        language: system
+        entry: uv run ruff check
+        args: [src/]
+        pass_filenames: false
+
+      - id: ruff-format
+        name: ruff format
+        language: system
+        entry: uv run ruff format --check
+        args: [src/]
+        pass_filenames: false
+
+      - id: ty
+        name: ty check
+        language: system
+        entry: uv run ty check
+        args: [src/]
+        pass_filenames: false

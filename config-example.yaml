@@ -15,3 +15,15 @@
     "client-secret": "YYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYY"
     "playlist": "Real Playlist Name"
     "test-playlist": "Test Playlist Name"
+  "youtube":
+    enabled: false
+    # path to the auth file created by ytmusicapi oauth
+    # see: https://ytmusicapi.readthedocs.io/en/stable/setup/oauth.html
+    "auth-file": "youtube-oauth.json"
+    "playlist": "Real Playlist Name"
+    "test-playlist": "Test Playlist Name"
+    # YouTube Music's internal API rejects OAuth tokens for browsing (get_artist, get_album_tracks).
+    # Artist/album data is cached for 90 days by default to stay warm across OAuth refreshes.
+    # If you add new artists and see HTTP 400 errors, re-run once with browser-cookie auth
+    # to warm the cache, then switch back to OAuth for playlist sync.
+    # "cache-ttl-days": 90

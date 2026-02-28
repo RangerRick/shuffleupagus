@@ -1,21 +1,23 @@
 import copy
+
 import spotipy
 from spotipy.oauth2 import SpotifyOAuth
 
 from ...core.model import Album, Artist, Service, Track
-from .model import SpotifyArtist, SpotifyAlbum, SpotifyTrack, sanitize_id
+from .model import SpotifyAlbum, SpotifyArtist, SpotifyTrack, sanitize_id
+
 
 class SpotifyService(Service):
     name = "spotify"
 
-    spotify:spotipy.Spotify
+    spotify: spotipy.Spotify
 
     def login(self):
         creds = SpotifyOAuth(
-            client_id=self.config['client-id'],
-            client_secret=self.config['client-secret'],
-            scope=self.config['scope'],
-            redirect_uri="http://localhost:9090/"
+            client_id=self.config["client-id"],
+            client_secret=self.config["client-secret"],
+            scope=self.config["scope"],
+            redirect_uri="http://localhost:9090/",
         )
         self.spotify = spotipy.Spotify(auth_manager=creds)
 
@@ -25,7 +27,7 @@ class SpotifyService(Service):
     def sanitize_id(self, id: str) -> str:
         return sanitize_id(id)
 
-    def get_artist(self, artist:str|Artist) -> SpotifyArtist:
+    def get_artist(self, artist: str | Artist) -> SpotifyArtist:
         if isinstance(artist, str):
             artist_id = self.sanitize_id(artist)
             artist_obj = None
@@ -47,7 +49,7 @@ class SpotifyService(Service):
 
         return SpotifyArtist.from_dict(ret)
 
-    def get_album_by_id(self, album_id:str) -> Album:
+    def get_album_by_id(self, album_id: str) -> Album:
         album_id = self.sanitize_id(album_id)
 
         cache_key = "album:" + album_id
@@ -58,14 +60,14 @@ class SpotifyService(Service):
 
         return SpotifyAlbum.from_dict(ret)
 
-    def get_artist_albums(self, artist:Artist) -> list[Album]:
+    def get_artist_albums(self, artist: Artist) -> list[Album]:
         cache_key = "artist:" + artist.id + ":albums"
 
         ret = self.cache.read(cache_key)
         if not ret:
             album = self.spotify.artist_albums(artist.id)
-            if album is not None and 'items' in album:
-                ret = album['items']
+            if album is not None and "items" in album:
+                ret = album["items"]
             self.cache.write(cache_key, ret)
 
         albums = []
@@ -74,38 +76,38 @@ class SpotifyService(Service):
                 albums.append(SpotifyAlbum.from_dict(album))
 
         return albums
-    
-    def get_album_tracks(self, album:Album) -> list[Track]:
-        cache_key = "album:" + album.id + ':tracks'
+
+    def get_album_tracks(self, album: Album) -> list[Track]:
+        cache_key = "album:" + album.id + ":tracks"
 
         ret = self.cache.read(cache_key)
         if not ret:
             t = self.spotify.album_tracks(album.id)
-            if t is not None and 'items' in t:
-                ret = t['items']
+            if t is not None and "items" in t:
+                ret = t["items"]
             self.cache.write(cache_key, ret)
 
-        tracks:list[Track] = []
+        tracks: list[Track] = []
         if ret:
             for track in ret:
                 isrc = None
-                if 'external_ids' in track and 'isrc' in track['external_ids']:
-                    isrc = str(track['external_ids']['isrc'])
+                if "external_ids" in track and "isrc" in track["external_ids"]:
+                    isrc = str(track["external_ids"]["isrc"])
 
                 spotifyTrack = SpotifyTrack(
-                    id=track['id'],
-                    name=track['name'],
-                    duration_ms=track['duration_ms'],
+                    id=track["id"],
+                    name=track["name"],
+                    duration_ms=track["duration_ms"],
                     isrc=isrc,
                     album=album,
                 )
-                for artist in track['artists']:
-                    spotifyTrack.artists.append(self.get_artist(artist['id']))
+                for artist in track["artists"]:
+                    spotifyTrack.artists.append(self.get_artist(artist["id"]))
                 tracks.append(spotifyTrack)
 
         return tracks
 
-    def get_artist_tracks(self, artist:Artist) -> list[Track]:
+    def get_artist_tracks(self, artist: Artist) -> list[Track]:
         tracks = []
 
         albums = self.get_artist_albums(artist)
@@ -114,32 +116,32 @@ class SpotifyService(Service):
 
         return tracks
 
-    def get_artist_top_tracks(self, artist:Artist) -> list[Track]:
+    def get_artist_top_tracks(self, artist: Artist) -> list[Track]:
         cache_key = "top-tracks:" + artist.id
 
         ret = self.cache.read(cache_key)
         if not ret:
             ret = self.spotify.artist_top_tracks(artist.id)
             self.cache.write(cache_key, ret)
-        
+
         tracks = []
-        if ret is not None and 'tracks' in ret:
-            for track in ret['tracks']:
-                album = self.get_album_by_id(track['album']['id'])
+        if ret is not None and "tracks" in ret:
+            for track in ret["tracks"]:
+                album = self.get_album_by_id(track["album"]["id"])
 
                 isrc = None
-                if 'external_ids' in track and 'isrc' in track['external_ids']:
-                    isrc = track['external_ids']['isrc']
+                if "external_ids" in track and "isrc" in track["external_ids"]:
+                    isrc = track["external_ids"]["isrc"]
 
                 artists = []
-                for a in track['artists']:
-                    a = self.get_artist(a['id'])
+                for a in track["artists"]:
+                    a = self.get_artist(a["id"])
                     artists.append(a)
 
                 spotifyTrack = SpotifyTrack(
-                    id=track['id'],
-                    name=track['name'],
-                    duration_ms=track['duration_ms'],
+                    id=track["id"],
+                    name=track["name"],
+                    duration_ms=track["duration_ms"],
                     isrc=isrc,
                     album=album,
                     artists=artists,
@@ -148,21 +150,21 @@ class SpotifyService(Service):
 
         return tracks
 
-    def get_playlist_id_for_name(self, playlist_name:str) -> str:
+    def get_playlist_id_for_name(self, playlist_name: str) -> str:
         offset = 0
         while True:
-            results = self.spotify.current_user_playlists(limit=50,offset=offset)
-            if results and 'items' in results:
-                items = results['items']
+            results = self.spotify.current_user_playlists(limit=50, offset=offset)
+            if results and "items" in results:
+                items = results["items"]
                 for item in items:
-                    if item['name'] == playlist_name:
-                        return item['id']
-            if not results or len(results['items']) < 50:
+                    if item["name"] == playlist_name:
+                        return item["id"]
+            if not results or len(results["items"]) < 50:
                 break
             offset += 50
         raise ValueError(f"Playlist not found: {playlist_name}")
 
-    def sync(self, playlist_name:str, tracks:list[str]=[]):
+    def sync(self, playlist_name: str, tracks: list[str] = []):
         playlist_id = self.get_playlist_id_for_name(playlist_name)
 
         playlist_tracks = copy.deepcopy(tracks)

@@ -1,22 +1,99 @@
 [project]
 name = "shuffleupagus"
-version = "1.0.0"
+version = "1.1.0"
 description = "generate and synchronize smart, balanced playlists"
-requires-python = ">= 3.10"
+requires-python = ">=3.13"
 
 dependencies = [
-  "colorama           >= 0.4.6",
-  "coloredlogs        >= 15.0",
-  "joblib             >= 1.4.2",
-  "pyyaml             >= 6.0.2",
+  "colorama                 >= 0.4.6",
+  "coloredlogs              >= 15.0",
+  "google-api-python-client >= 2.179.0",
+  "google-auth-oauthlib     >= 1.2.2",
+  "joblib                   >= 1.4.2",
+  "pyyaml                   >= 6.0.2",
 
-  "apple-music-python >= 1.0.6",
-  "py-applescript     >= 1.0.3",
-  "spotipy            >= 2.25",
+  "apple-music-python       >= 1.0.6",
+  "py-applescript           >= 1.0.3",
+  "spotipy                  >= 2.25",
+  "ytmusicapi               >= 1.11.0",
 ]
 
 [project.scripts]
 shuffleupagus = "shuffleupagus.shuffleupagus:main"
 
-[tool.black]
+[build-system]
+requires = ["uv_build"]
+build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+  "pytest",
+  "pytest-cov",
+  "ruff",
+  "ty",
+]
+
+[tool.ruff]
 line-length = 120
+
+[tool.ruff.lint]
+select = ["ALL"]
+ignore = [
+  "D",      # docstrings — not enforced project-wide
+  "COM812", # trailing comma — conflicts with formatter
+  "ISC001", # implicit string concat — conflicts with formatter
+  "ANN",    # type annotations — gradual adoption, not enforced yet
+  "T20",    # print — used intentionally for progress output
+  "ERA001", # commented-out code — used for reference
+  "FIX002", # TODO comments — tracked in beads, not code
+  "TD",     # TODO formatting
+  "FBT",    # boolean arg patterns — common in this codebase
+  "S311",   # random — used for shuffling, not cryptography
+  "TRY003", # long exception messages — acceptable for clarity
+  "TRY002", # custom exception types — not necessary for a simple tool
+  "EM",     # exception string/f-string literals — acceptable
+  "TID252", # relative imports — intentional within package
+  "A",      # shadowing builtins (`id` etc.) — pervasive pattern
+  "PTH",    # pathlib vs os.path — gradual migration
+  "RUF012", # mutable class attrs — existing pattern
+  "LOG",    # root logger / logging patterns — existing style
+  "G",      # logging format — existing style
+  "PLR1722",# exit vs sys.exit — minor
+  "PLR2004",# magic values — acceptable for HTTP status codes
+  "PLR0913",# too many args — existing signatures
+  "S101",   # assert — used intentionally
+  "S113",   # requests without timeout — has timeout in Data API helpers
+  "BLE001", # blind except — some intentional broad catches
+  "B006",   # mutable default args — existing pattern
+  "C417",   # unnecessary map() — existing style
+  "SLF001", # private member access — intentional for ytmusicapi internals
+  "PERF402",# list append in loop — existing style
+  "RET504", # assignment before return — existing style
+  "PGH003", # type: ignore without code — minor
+  "N806",   # camelCase variables — existing naming convention
+  "C901",   # complexity — existing code
+  "PLW2901",# loop variable overwrite — existing pattern
+  "SIM102", # nested if — existing style
+  "ARG002", # unused method argument — abstract method stubs
+  "EXE002", # shebang — not relevant for a package module
+  "TC001",  # type-checking imports — gradual adoption
+  "PLW0108",# unnecessary lambda — existing style
+  "N818",   # exception naming — not using custom exceptions
+  "N815",   # mixedCase class attributes — existing naming convention
+  "N816",   # mixedCase module-level variables — existing naming convention
+  "SIM108", # ternary operator — existing if/else style
+  "PERF401",# list.extend vs append in loop — existing style
+]
+
+[tool.ruff.format]
+quote-style = "double"
+
+[tool.ty.environment]
+python-version = "3.13"
+
+[tool.ty.terminal]
+error-on-warning = true
+
+[tool.pytest.ini_options]
+addopts = "--cov=src --cov-report=term-missing"
+testpaths = ["tests"]
