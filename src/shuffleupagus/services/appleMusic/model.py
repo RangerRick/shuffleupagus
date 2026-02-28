@@ -44,7 +44,13 @@ class AppleMusicAlbum(Album):
 
 class AppleMusicTrack(Track):
     def __init__(
-        self, id: str, name: str, duration_ms: int, isrc: str, album: Album | None = None, artists: list[Artist] = []
+        self,
+        id: str,
+        name: str,
+        duration_ms: int,
+        isrc: str,
+        album: Album | None = None,
+        artists: list[Artist] | None = None,
     ):
         super().__init__(id=id, name=name, duration_ms=duration_ms, isrc=isrc, album=album, artists=artists)
 
@@ -53,7 +59,7 @@ class AppleMusicTrack(Track):
         return sanitize_id(id)
 
     @staticmethod
-    def from_dict(obj, album: Album | None = None, artists: list[Artist] = []):
+    def from_dict(obj, album: Album | None = None, artists: list[Artist] | None = None):
         return AppleMusicTrack(
             id=obj["id"],
             name=obj["attributes"]["name"],

@@ -50,15 +50,17 @@ class Album(ShufObject):
     def __init__(self, id: str, name: str, release_date=None):
         super().__init__(id, name)
 
-        if release_date:
+        if release_date is not None:
             if isinstance(release_date, str):
                 if "-" not in release_date:
+                    if not (release_date.isdigit() and len(release_date) == 4):
+                        raise ValueError(f"Invalid year string: {release_date!r}")
                     release_date = release_date + "-01-01"
                 self.release_date = datetime.date.fromisoformat(release_date)
             elif isinstance(release_date, datetime.date):
                 self.release_date = release_date
             else:
-                raise ValueError
+                raise ValueError(f"Invalid release_date type: {type(release_date).__name__}")
 
     def __str__(self) -> str:
         return f"Album({self.id}): {self.name}"
@@ -71,7 +73,7 @@ class Track(ShufObject):
     duration_ms = 0
     isrc: str | None = None
     album: Album | None = None
-    artists: list[Artist] = []
+    artists: list[Artist]
     dedupe_hash = None
 
     def __init__(
@@ -81,13 +83,13 @@ class Track(ShufObject):
         duration_ms: int,
         isrc: str | None = None,
         album: Album | None = None,
-        artists: list[Artist] = [],
+        artists: list[Artist] | None = None,
     ):
         super().__init__(id, name)
         self.duration_ms = duration_ms
         self.isrc = isrc
         self.album = album
-        self.artists = artists
+        self.artists = list(artists) if artists else []
 
         # create a dedupe hash based on name and duration rounded to nearest second
         cleaned_name = unicodedata.normalize("NFKD", name).casefold().strip()
@@ -115,7 +117,13 @@ class Service:
     def __init__(self, config: Config):
         svc_config = config.service(self.name)
         ttl_days = svc_config.get("cache-ttl-days")
-        cutoff = float(ttl_days) * 24 * 60 * 60 if ttl_days is not None else self.cache_cutoff
+        if ttl_days is not None:
+            ttl_days = float(ttl_days)
+            if ttl_days <= 0:
+                raise ValueError(f"cache-ttl-days must be positive, got {ttl_days}")
+            cutoff = ttl_days * 24 * 60 * 60
+        else:
+            cutoff = self.cache_cutoff
         self.cache = Cache(self.name, cutoff=cutoff)
         self.config = svc_config
 
@@ -222,5 +230,5 @@ class Service:
 
         return spread_artist_playlists(artist_playlists, _vip_artist_ids)
 
-    def sync(self, playlist_name: str, tracks: list[str] = []) -> None:
+    def sync(self, playlist_name: str, tracks: list[str] | None = None) -> None:
         raise NotImplementedError

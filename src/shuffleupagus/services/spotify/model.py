@@ -50,7 +50,7 @@ class SpotifyTrack(model.Track):
         duration_ms: int,
         isrc: str | None = None,
         album: model.Album | None = None,
-        artists: list[model.Artist] = [],
+        artists: list[model.Artist] | None = None,
     ):
         super().__init__(
             id=sanitize_id(id), name=name, duration_ms=duration_ms, isrc=isrc, album=album, artists=artists

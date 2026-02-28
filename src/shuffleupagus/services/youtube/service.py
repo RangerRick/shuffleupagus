@@ -30,8 +30,14 @@ class YoutubeService(Service):
 
     client: YTMusic
 
+    def _require_config(self, key: str) -> str:
+        val = self.config.get(key)
+        if val is None:
+            raise ValueError(f"Missing required config key 'services.youtube.{key}'")
+        return val
+
     def login(self):
-        auth_file = Path(get_filepath(self.config["auth-file"]))
+        auth_file = Path(get_filepath(self._require_config("auth-file")))
         client_id = self.config.get("client-id")
         client_secret = self.config.get("client-secret")
 
@@ -132,7 +138,7 @@ class YoutubeService(Service):
         artist_url = "https://www.youtube.com/" + artist if artist.startswith("@") else artist
 
         logger.debug(f"* fetching channel ID for artist handle: {artist} (URL: {artist_url})")
-        response = requests.get(artist_url)
+        response = requests.get(artist_url, timeout=30)
         if response.status_code < 200 or response.status_code >= 300:
             raise ValueError(
                 f"Failed to fetch channel page for artist handle: {artist} (status code: {response.status_code})",
@@ -146,8 +152,8 @@ class YoutubeService(Service):
                 channel_id = m.group(1)
                 break
 
-        if not channel_id:
-            raise ValueError(f"Channel ID not found in page text for artist handle: {artist}")
+        if not channel_id or not channel_id.startswith("UC"):
+            raise ValueError(f"Could not extract a valid channel ID for artist handle: {artist} (got: {channel_id!r})")
 
         handle = artist if artist.startswith("@") else None
         if not handle:
@@ -162,14 +168,14 @@ class YoutubeService(Service):
         logger.debug(f"* resolved {artist} to channel ID: {channel_id} (handle: {handle})")
         return channel_id, handle
 
-    def get_artist(self, artist: str | Artist) -> YoutubeArtist:
+    def get_artist(self, artist: str | Artist) -> YoutubeArtist | None:
         if isinstance(artist, str):
             original = artist
             try:
                 artist_id, handle = self.__get_channel_id(artist)
             except ValueError as e:
                 logger.warning(f"* could not resolve artist handle '{original}': {e}, skipping")
-                return YoutubeArtist(original, original)
+                return None
             artist_obj = None
         else:
             artist_id = artist.id
@@ -200,7 +206,7 @@ class YoutubeService(Service):
                         logger.warning(
                             f"* {original} has no YouTube Music page ({e}), skipping (channel: {artist_id})",
                         )
-                    return YoutubeArtist(artist_id, original, handle=handle)
+                    return None
                 self.cache.write(cache_key, ret)
 
         ya = YoutubeArtist.from_dict(ret)
@@ -284,7 +290,9 @@ class YoutubeService(Service):
                 )
                 for artist in track.get("artists", []):
                     if artist.get("id") is not None:
-                        youtubeTrack.artists.append(self.get_artist(artist["id"]))
+                        resolved_artist = self.get_artist(artist["id"])
+                        if resolved_artist is not None:
+                            youtubeTrack.artists.append(resolved_artist)
                 tracks.append(youtubeTrack)
 
         return tracks
@@ -322,7 +330,7 @@ class YoutubeService(Service):
                 break
         raise ValueError(f"Playlist not found: {playlist_name}")
 
-    def sync(self, playlist_name: str, tracks: list[str] = []):
+    def sync(self, playlist_name: str, tracks: list[str] | None = None):
         playlist_id = self.get_playlist_id_for_name(playlist_name)
 
         # Fetch existing playlist items via Data API v3
@@ -345,8 +353,8 @@ class YoutubeService(Service):
                 params={"id": item_id},
             )
 
-        logger.debug(f"  * adding {len(tracks)} new items to playlist")
-        for video_id in tracks:
+        logger.debug(f"  * adding {len(tracks or [])} new items to playlist")
+        for video_id in tracks or []:
             self._data_api_post(
                 "https://www.googleapis.com/youtube/v3/playlistItems",
                 params={"part": "snippet"},

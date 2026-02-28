@@ -18,11 +18,17 @@ class SpotifyService(Service):
 
     spotify: spotipy.Spotify
 
+    def _require_config(self, key: str) -> str:
+        val = self.config.get(key)
+        if val is None:
+            raise ValueError(f"Missing required config key 'services.spotify.{key}'")
+        return val
+
     def login(self):
         creds = SpotifyOAuth(
-            client_id=self.config["client-id"],
-            client_secret=self.config["client-secret"],
-            scope=self.config["scope"],
+            client_id=self._require_config("client-id"),
+            client_secret=self._require_config("client-secret"),
+            scope=self._require_config("scope"),
             redirect_uri="http://localhost:9090/",
         )
         self.spotify = spotipy.Spotify(auth_manager=creds)
@@ -93,6 +99,7 @@ class SpotifyService(Service):
             if album is not None and "items" in album:
                 ret = album["items"]
             self.cache.write(cache_key, ret if ret is not None else [])
+            # Spotify returns albums newest-first; ret[0] is the latest release.
             if ret:
                 self.cache.write(fp_key, ret[0]["id"], ttl=_FINGERPRINT_TTL)
 
@@ -194,10 +201,10 @@ class SpotifyService(Service):
             offset += 50
         raise ValueError(f"Playlist not found: {playlist_name}")
 
-    def sync(self, playlist_name: str, tracks: list[str] = []):
+    def sync(self, playlist_name: str, tracks: list[str] | None = None):
         playlist_id = self.get_playlist_id_for_name(playlist_name)
 
-        playlist_tracks = copy.deepcopy(tracks)
+        playlist_tracks = copy.deepcopy(tracks or [])
         self.spotify.playlist_replace_items(playlist_id, playlist_tracks[0:80])
         del playlist_tracks[0:80]
         while len(playlist_tracks) > 0:
