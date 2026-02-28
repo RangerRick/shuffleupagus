@@ -35,7 +35,7 @@ class Config:
             self.__artist_config = artist_data
 
     def is_enabled(self, name: str) -> bool:
-        return self.__service_config.get(name, {}).get("enabled", True)
+        return self.__service_config.get(name, {}).get("enabled", False)
 
     def service(self, name: str) -> dict:
         return self.__service_config.get(name, {})
