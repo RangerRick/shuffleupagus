@@ -1,6 +1,7 @@
 import copy
 import os
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import applemusicpy
 import applescript
@@ -160,10 +161,16 @@ class AppleMusicService(Service):
         return tracks
 
     def get_artist_tracks(self, artist: Artist) -> list[Track]:
-        tracks = []
         albums = self.get_artist_albums(artist)
-        for album in albums:
-            tracks += self.get_album_tracks(album, artist)
+        if not albums:
+            return []
+
+        tracks: list[Track] = []
+        with ThreadPoolExecutor(max_workers=8) as executor:
+            futures = {executor.submit(self.get_album_tracks, album, artist): album for album in albums}
+            for future in as_completed(futures):
+                tracks += future.result()
+
         return tracks
 
     def get_artist_top_tracks(self, artist: Artist) -> list[Track]:
