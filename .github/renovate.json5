@@ -1,0 +1,44 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": [
+    "config:recommended",
+    ":configMigration",
+    ":disableDependencyDashboard",
+    ":semanticCommitTypeAll(build)",
+  ],
+
+  // General settings
+  "assigneesFromCodeOwners": true,
+  "baseBranchPatterns": ["main"],
+  "branchConcurrentLimit": 5,
+  "internalChecksFilter": "strict",
+  "labels": ["dependencies"],
+  "minimumReleaseAge": "7 days",
+  "prCreation": "not-pending",
+  "prHourlyLimit": 0,
+  "rangeStrategy": "bump",
+
+  // Package- or manager-specific rules
+  "packageRules": [
+    {
+      "groupName": "auto-merge non-major dependencies",
+      "groupSlug": "all-non-major",
+      "matchUpdateTypes": ["!major"],
+      "automerge": true,
+    },
+    {
+      "groupName": "auto-merge developer dependencies",
+      "groupSlug": "dev-dependencies",
+      "matchDepTypes": ["devDependencies"],
+      "automerge": true,
+    },
+
+    {
+      "groupName": "group PyTest package updates together",
+      "groupSlug": "pytest",
+      "matchManagers": ["pip_requirements"],
+      "matchPackageNames": ["/^pytest/"],
+    },
+  ],
+
+}
