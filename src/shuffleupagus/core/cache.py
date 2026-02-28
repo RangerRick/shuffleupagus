@@ -30,8 +30,16 @@ class Cache:
         return os.path.expanduser(f"~/.cache/shuffleupagus/{self.name}.joblib.gz")
 
     def _load(self):
-        if os.path.exists(self._filename()):
-            self._cache = joblib.load(self._filename())
+        path = self._filename()
+        if os.path.exists(path):
+            try:
+                self._cache = joblib.load(path)
+            except Exception as exc:
+                print(
+                    f"* cache file corrupt for '{self.name}', starting fresh ({type(exc).__name__}: {exc})",
+                    flush=True,
+                )
+                self._cache = {}
 
     def _clean_locked(self):
         """Evict expired entries. Caller must hold self._lock."""
