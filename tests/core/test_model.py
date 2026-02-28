@@ -217,13 +217,13 @@ def test_generate_playlist_requires_album():
     assert "no-album" not in result
 
 
-def test_generate_playlist_unknown_artist_raises():
+def test_generate_playlist_unknown_artist_skips():
     class Svc(_StubService):
         def get_artist(self, artist):
             return None
 
-    with pytest.raises(ValueError, match="not found"):
-        Svc().generate_playlist(["ghost"])
+    result = Svc().generate_playlist(["ghost"])
+    assert result == []
 
 
 def test_generate_playlist_returns_unique_ids():

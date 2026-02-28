@@ -54,9 +54,10 @@ def test_sanitize_url_with_query_is_idempotent(url):
 
 
 @given(raw=st.one_of(_url_path, _url_with_query))
-def test_sanitized_id_never_starts_with_http(raw):
-    """For URL inputs, the sanitized result never starts with 'http'."""
-    assert not sanitize_id(raw).startswith("http")
+def test_sanitized_id_never_starts_with_url_scheme(raw):
+    """For URL inputs, the sanitized result never starts with a URL scheme."""
+    result = sanitize_id(raw)
+    assert not result.startswith(("http://", "https://"))
 
 
 @given(raw=st.one_of(_plain_id, _url_path, _url_with_query))

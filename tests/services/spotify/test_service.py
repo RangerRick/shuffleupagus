@@ -110,6 +110,7 @@ def test_get_artist_albums_empty(svc):
 def test_get_artist_albums_fingerprint_match_uses_stale(svc):
     """Stale cached albums + matching fingerprint → skip full refetch."""
     import time
+
     from shuffleupagus.core.model import Artist
 
     stale_albums = [_album_payload("alb1", "Old Album")]
@@ -128,6 +129,7 @@ def test_get_artist_albums_fingerprint_match_uses_stale(svc):
 def test_get_artist_albums_fingerprint_mismatch_refetches(svc):
     """Stale cached albums + fingerprint mismatch → full refetch."""
     import time
+
     from shuffleupagus.core.model import Artist
 
     stale_albums = [_album_payload("alb1", "Old Album")]

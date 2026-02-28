@@ -5,7 +5,6 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import applemusicpy
 import applescript
-import requests
 
 from ...core.model import Album, Artist, Service, Track
 from ...core.util import logger
@@ -58,7 +57,7 @@ class AppleMusicService(Service):
                 if artist_obj is not None:
                     ret = artist_obj
                     self.cache.write(cache_key, ret)
-            except (requests.RequestException, KeyError) as e:
+            except Exception as e:
                 logger.error(f"  ! error fetching artist: {e}")
 
         if ret is not None and ret["data"] and len(ret["data"]) > 0:
@@ -78,7 +77,7 @@ class AppleMusicService(Service):
                 if album_obj is not None:
                     ret = album_obj
                     self.cache.write(cache_key, ret)
-            except (requests.RequestException, KeyError) as e:
+            except Exception as e:
                 logger.error(f"  ! error fetching album: {e}")
 
         if ret is not None and ret["data"] and len(ret["data"]) > 0:
@@ -97,7 +96,7 @@ class AppleMusicService(Service):
                 if albums is not None:
                     ret = albums
                     self.cache.write(cache_key, ret)
-            except (requests.RequestException, KeyError) as e:
+            except Exception as e:
                 logger.error(f"  ! error fetching artist albums: {e}")
 
         if ret is None or "data" not in ret or len(ret["data"]) == 0:
@@ -119,7 +118,7 @@ class AppleMusicService(Service):
                 if track_obj is not None:
                     ret = track_obj
                     self.cache.write(cache_key, ret)
-            except (requests.RequestException, KeyError) as e:
+            except Exception as e:
                 logger.error(f"  ! error fetching track: {e}")
 
         if ret is not None and ret["data"] and len(ret["data"]) > 0:
@@ -151,7 +150,7 @@ class AppleMusicService(Service):
                 if album_tracks is not None:
                     ret = album_tracks
                     self.cache.write(cache_key, ret)
-            except (requests.RequestException, KeyError) as e:
+            except Exception as e:
                 logger.error(f"  ! error fetching album tracks: {e}")
 
         if ret is None or "data" not in ret or len(ret["data"]) == 0:
@@ -191,7 +190,7 @@ class AppleMusicService(Service):
                 if top_tracks is not None:
                     ret = top_tracks
                 self.cache.write(cache_key, ret)
-            except (requests.RequestException, KeyError) as e:
+            except Exception as e:
                 logger.error(f"  ! error fetching top tracks: {e}")
 
         if ret is None or "data" not in ret or len(ret["data"]) == 0:

@@ -112,7 +112,7 @@ class YoutubeService(Service):
         self.cache.save()
 
     def sanitize_id(self, id: str) -> str:
-        if id.startswith(("http", "youtube.com", "www.youtube.com")):
+        if id.startswith(("http://", "https://", "youtube.com", "www.youtube.com")):
             url = id.removeprefix("https://").removeprefix("http://").removeprefix("www.")
             if url.startswith("youtube.com/@"):
                 return "@" + url.removeprefix("youtube.com/@").split("?")[0].split("/")[0]

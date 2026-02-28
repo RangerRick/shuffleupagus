@@ -174,7 +174,8 @@ class Service:
         def _process(idx: int, artist_id: str) -> tuple[str, list[Track]]:
             artist = self.get_artist(artist_id)
             if artist is None:
-                raise ValueError(f"Artist {artist_id} not found")
+                logger.warning(f"  ! artist {artist_id} not found, skipping")
+                return artist_id, []
             logger.info(f"* processing artist {artist.name} ({idx + 1}/{total})")
 
             top_tracks = self.get_artist_top_tracks(artist)
@@ -225,8 +226,12 @@ class Service:
                 executor.submit(_process, idx, artist_id): artist_id for idx, artist_id in enumerate(_artist_ids)
             }
             for future in as_completed(futures):
-                a_id, playlist = future.result()
-                artist_playlists[a_id] = playlist
+                artist_id = futures[future]
+                try:
+                    a_id, playlist = future.result()
+                    artist_playlists[a_id] = playlist
+                except Exception:
+                    logger.exception(f"  ! failed to process artist {artist_id}, skipping")
 
         return spread_artist_playlists(artist_playlists, _vip_artist_ids)
 

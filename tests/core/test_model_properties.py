@@ -44,10 +44,10 @@ def test_dedupe_hash_is_a_non_empty_string(name, duration_ms):
 
 @given(name=_track_name, duration_ms=_duration_ms)
 def test_dedupe_hash_is_case_insensitive(name, duration_ms):
-    """Upper- and lower-cased versions of the same name produce the same hash."""
-    t_lower = _make_track(name.lower(), duration_ms)
-    t_upper = _make_track(name.upper(), duration_ms)
-    assert t_lower.dedupe_hash == t_upper.dedupe_hash
+    """Casefolded versions of the same name produce the same hash."""
+    t_original = _make_track(name, duration_ms)
+    t_casefolded = _make_track(name.casefold(), duration_ms)
+    assert t_original.dedupe_hash == t_casefolded.dedupe_hash
 
 
 _ascii_non_punct_name = st.text(

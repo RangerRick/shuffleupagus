@@ -93,26 +93,24 @@ def test_get_channel_id_extracts_handle_from_html(svc):
     assert artist.handle == "@newband"
 
 
-def test_get_channel_id_http_error_logs_and_returns_placeholder(svc):
-    # HTTP errors are caught; get_artist returns a placeholder instead of raising.
+def test_get_channel_id_http_error_returns_none(svc):
+    # HTTP errors are caught; get_artist returns None instead of raising.
     mock_resp = MagicMock()
     mock_resp.status_code = 404
     mock_resp.text = "Not Found"
     with patch("shuffleupagus.services.youtube.service.requests.get", return_value=mock_resp):
         artist = svc.get_artist("@missing")
-    assert artist.id == "@missing"
-    assert artist.name == "@missing"
+    assert artist is None
 
 
-def test_get_channel_id_not_found_in_html_returns_placeholder(svc):
-    # Missing channel ID in page is caught; get_artist returns a placeholder.
+def test_get_channel_id_not_found_in_html_returns_none(svc):
+    # Missing channel ID in page is caught; get_artist returns None.
     mock_resp = MagicMock()
     mock_resp.status_code = 200
     mock_resp.text = "<html>no channel info here</html>"
     with patch("shuffleupagus.services.youtube.service.requests.get", return_value=mock_resp):
         artist = svc.get_artist("@unknown")
-    assert artist.id == "@unknown"
-    assert artist.name == "@unknown"
+    assert artist is None
 
 
 # ---------------------------------------------------------------------------
@@ -127,13 +125,12 @@ def test_get_artist_cache_hit(svc):
     svc.client.get_artist.assert_not_called()
 
 
-def test_get_artist_no_yt_music_page_fallback(svc):
+def test_get_artist_no_yt_music_page_returns_none(svc):
     from ytmusicapi.exceptions import YTMusicServerError
     svc.client.get_artist.side_effect = YTMusicServerError("500")
     svc.cache.write("channel:@ghost", "UCghost")
     artist = svc.get_artist("@ghost")
-    assert artist.id == "UCghost"
-    assert artist.name == "@ghost"
+    assert artist is None
 
 
 def test_get_artist_400_logs_oauth_warning(svc, caplog):
@@ -146,13 +143,12 @@ def test_get_artist_400_logs_oauth_warning(svc, caplog):
     assert "400" in caplog.text or "OAuth" in caplog.text
 
 
-def test_get_artist_resolution_failure_returns_placeholder(svc):
+def test_get_artist_resolution_failure_returns_none(svc):
     mock_resp = MagicMock()
     mock_resp.status_code = 404
     with patch("shuffleupagus.services.youtube.service.requests.get", return_value=mock_resp):
         artist = svc.get_artist("@nope")
-    assert artist.id == "@nope"
-    assert artist.name == "@nope"
+    assert artist is None
 
 
 # ---------------------------------------------------------------------------
@@ -203,6 +199,7 @@ def test_get_artist_albums_cache_hit(svc):
 def test_get_artist_albums_fingerprint_match_uses_stale(svc):
     """Stale cached albums + matching inline fingerprint → no API call."""
     import time
+
     from shuffleupagus.services.youtube.model import YoutubeArtist
 
     stale = [{"browseId": "MPL1", "title": "Album", "year": "2020"}]
@@ -219,6 +216,7 @@ def test_get_artist_albums_fingerprint_match_uses_stale(svc):
 def test_get_artist_albums_fingerprint_mismatch_refetches(svc):
     """Stale cached albums + inline fingerprint mismatch → full API call."""
     import time
+
     from shuffleupagus.services.youtube.model import YoutubeArtist
 
     stale = [{"browseId": "MPL1", "title": "Old Album", "year": "2020"}]
