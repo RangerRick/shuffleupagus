@@ -1,4 +1,5 @@
 import copy
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import spotipy
 from spotipy.oauth2 import SpotifyOAuth
@@ -108,11 +109,15 @@ class SpotifyService(Service):
         return tracks
 
     def get_artist_tracks(self, artist: Artist) -> list[Track]:
-        tracks = []
-
         albums = self.get_artist_albums(artist)
-        for album in albums:
-            tracks += self.get_album_tracks(album)
+        if not albums:
+            return []
+
+        tracks: list[Track] = []
+        with ThreadPoolExecutor(max_workers=8) as executor:
+            futures = {executor.submit(self.get_album_tracks, album): album for album in albums}
+            for future in as_completed(futures):
+                tracks += future.result()
 
         return tracks
 
