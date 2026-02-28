@@ -132,7 +132,7 @@ class YoutubeService(Service):
         artist_url = "https://www.youtube.com/" + artist if artist.startswith("@") else artist
 
         logger.debug(f"* fetching channel ID for artist handle: {artist} (URL: {artist_url})")
-        response = requests.get(artist_url)
+        response = requests.get(artist_url, timeout=30)
         if response.status_code < 200 or response.status_code >= 300:
             raise ValueError(
                 f"Failed to fetch channel page for artist handle: {artist} (status code: {response.status_code})",
