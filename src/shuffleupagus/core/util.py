@@ -12,8 +12,10 @@ logging.getLogger("urllib3").setLevel(logging.FATAL)
 logging.getLogger("spotipy").setLevel(logging.FATAL)
 logging.getLogger("spotipy.client").setLevel(logging.FATAL)
 
-def init_logging(level:str):
-    coloredlogs.install(level=level, logger=logger, fmt='%(message)s')
+
+def init_logging(level: str):
+    coloredlogs.install(level=level, logger=logger, fmt="%(message)s")
+
 
 def iter_namespace(ns_pkg):
     return pkgutil.iter_modules(ns_pkg.__path__, ns_pkg.__name__ + ".")
@@ -48,26 +50,26 @@ def spread_artist_playlists(artist_playlists, vip_artist_ids) -> list[str]:
         # Create a random-ish even distribution of tracks for each artist.
         # These will get meshed together later.
         while k > 0:
-            r = n/k
-            noise = 0 - .10 + (random.randrange(0, 20) / 100) + 1
+            r = n / k
+            noise = 0 - 0.10 + (random.randrange(0, 20) / 100) + 1
             r = r * noise
             r = round(r)
             if r == 0:
                 r = 1
-            r = min(r, n-k+1)
+            r = min(r, n - k + 1)
 
             segment = [None] * r
             segment[0] = p.pop(0)
-            k = k-1
-            n = n-r
+            k = k - 1
+            n = n - r
             new_p = new_p + segment
 
         if len(p) > 0:
             logging.warning(f"something is wrong, we had p left over ({len(p)})")
             exit(1)
 
-        offset = random.randint(0,20)
-        if (artistId in vip_artist_ids):
+        offset = random.randint(0, 20)
+        if artistId in vip_artist_ids:
             offset = vip_artist_ids.index(artistId)
 
         # make sure we've filled new_p to the max length properly,
@@ -79,7 +81,7 @@ def spread_artist_playlists(artist_playlists, vip_artist_ids) -> list[str]:
         artist_playlists[artistId] = new_p
 
     logging.info("* merging artist playlists")
-    artist_ids = list(filter(lambda id : id not in vip_artist_ids, artist_playlists.keys()))
+    artist_ids = list(filter(lambda id: id not in vip_artist_ids, artist_playlists.keys()))
     random.shuffle(artist_ids)
 
     min_position = int(len(artist_ids) * 0.05)

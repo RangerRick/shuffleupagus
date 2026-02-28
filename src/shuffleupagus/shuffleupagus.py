@@ -1,16 +1,24 @@
 import argparse
+
 from .core.config import Config
-from .core.util import init_logging, logger, load_plugins
+from .core.model import Service
+from .core.util import init_logging, load_plugins, logger
+
 
 def main():
 
     parser = argparse.ArgumentParser(
-                        prog='Shuffleupagus',
-                        description='generate and synchronize smart, balanced playlists')
+        prog="Shuffleupagus", description="generate and synchronize smart, balanced playlists"
+    )
 
-    parser.add_argument('--dry-run', default=False, action='store_true', help='no playlists will be updated')
-    parser.add_argument('--production', default=False, action='store_true', help='use production playlists instead of test ones')
-    parser.add_argument('--log-level', default='INFO', help='set the logging level')
+    parser.add_argument("--dry-run", default=False, action="store_true", help="no playlists will be updated")
+    parser.add_argument(
+        "--production",
+        default=False,
+        action="store_true",
+        help="use production playlists instead of test ones",
+    )
+    parser.add_argument("--log-level", default="INFO", help="set the logging level")
 
     args = parser.parse_args()
 
@@ -20,12 +28,12 @@ def main():
 
     plugins = load_plugins()
     for plugin in plugins:
-        pluginName = plugin.__name__.split('.')[-1]
+        pluginName = plugin.__name__.split(".")[-1]
         if not config.is_enabled(pluginName):
             logger.warning(f"Service {pluginName} is disabled in the configuration, skipping.")
             continue
 
-        service = plugin.create(config)
+        service: Service = plugin.create(config)
 
         artists = list(map(lambda a: service.sanitize_id(a), config.service_artists(service.name)))
         vips = list(map(lambda a: service.sanitize_id(a), config.vip_artists(service.name)))

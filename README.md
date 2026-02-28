@@ -25,33 +25,36 @@ Thus: Shuffleupagus was born.
 
 ## Requirements
 
-- Python 3.10+
-- [Spotipy](https://spotipy.readthedocs.io/) (for Spotify integration)
-- [apple-music-python](https://github.com/afterxleep/apple-music-python) (for Apple Music integration)
-- [py-applescript](https://github.com/rdhyee/py-applescript) (for Apple Music playlist management on macOS)
+- Python 3.13+
+- [uv](https://docs.astral.sh/uv/) for dependency management
 - See [pyproject.toml](pyproject.toml) for all dependencies.
 
 ## Installation
 
-1. Clone the repository:
+1. Install [uv](https://docs.astral.sh/uv/getting-started/installation/) if you don't have it:
+    ```sh
+    curl -LsSf https://astral.sh/uv/install.sh | sh
+    ```
+
+2. Clone the repository:
     ```sh
     git clone https://github.com/yourusername/shuffleupagus.git
     cd shuffleupagus
     ```
 
-2. Install dependencies:
+3. Install dependencies:
     ```sh
-    pip install .
+    uv sync
     ```
 
-3. Copy the example configuration files and edit them to match your accounts and preferences:
+4. Copy the example configuration files and edit them to match your accounts and preferences:
     ```sh
     mkdir -p ~/.config/shuffleupagus
     cp config-example.yaml ~/.config/shuffleupagus/config.yaml
     cp artists-example.yaml ~/.config/shuffleupagus/artists.yaml
     ```
 
-4. Fill in your API credentials and playlist details in the config files.
+5. Fill in your API credentials and playlist details in the config files.
 
 ## Configuration
 
