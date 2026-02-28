@@ -168,14 +168,14 @@ class YoutubeService(Service):
         logger.debug(f"* resolved {artist} to channel ID: {channel_id} (handle: {handle})")
         return channel_id, handle
 
-    def get_artist(self, artist: str | Artist) -> YoutubeArtist:
+    def get_artist(self, artist: str | Artist) -> YoutubeArtist | None:
         if isinstance(artist, str):
             original = artist
             try:
                 artist_id, handle = self.__get_channel_id(artist)
             except ValueError as e:
                 logger.warning(f"* could not resolve artist handle '{original}': {e}, skipping")
-                return YoutubeArtist(original, original)
+                return None
             artist_obj = None
         else:
             artist_id = artist.id
@@ -290,7 +290,9 @@ class YoutubeService(Service):
                 )
                 for artist in track.get("artists", []):
                     if artist.get("id") is not None:
-                        youtubeTrack.artists.append(self.get_artist(artist["id"]))
+                        resolved_artist = self.get_artist(artist["id"])
+                        if resolved_artist is not None:
+                            youtubeTrack.artists.append(resolved_artist)
                 tracks.append(youtubeTrack)
 
         return tracks
