@@ -45,24 +45,35 @@ def _finalize_service(
     logger.info(f"{service.tag}* finished updating {service.name}")
 
 
-def _load_services(config: Config, only: list[str] | None = None) -> list[Service]:
-    services: list[Service] = []
+def _load_services(
+    config: Config,
+    only: list[str] | None = None,
+) -> tuple[list[Service], list[tuple[str, Exception]]]:
+    created: list[Service] = []
     for plugin in load_plugins():
         plugin_name = plugin.__name__.split(".")[-1]
         if only is not None and plugin_name not in only:
             continue
         if config.is_enabled(plugin_name):
-            services.append(plugin.create(config))
+            created.append(plugin.create(config))
         else:
             logger.warning(
                 f"Service {plugin_name} is disabled in the configuration, skipping.",
             )
 
-    for service in services:
-        service.preflight()
-        service.login()
+    services: list[Service] = []
+    errors: list[tuple[str, Exception]] = []
+    for service in created:
+        try:
+            service.preflight()
+            service.login()
+        except RuntimeError as exc:
+            logger.warning(f"{service.tag}! {exc}")
+            errors.append((service.name, exc))
+        else:
+            services.append(service)
 
-    return services
+    return services, errors
 
 
 def main():
@@ -104,16 +115,13 @@ def main():
         only = [s.strip() for s in args.only_services.split(",")]
 
     config = Config()
-    services = _load_services(config, only=only)
+    services, errors = _load_services(config, only=only)
 
     def _handle_sigint(_signum, _frame):
         logger.warning("* interrupted, exiting")
         os._exit(130)
 
     prev_handler = signal.signal(signal.SIGINT, _handle_sigint)
-
-    # Phase 1: collect track data in parallel
-    errors: list[tuple[str, Exception]] = []
     results: dict[str, dict[str, list[Track]]] = {}
 
     def _worker(service):
