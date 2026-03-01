@@ -361,7 +361,7 @@ def test_browser_auth_valid(browser_svc):
         patch("shuffleupagus.services.youtube.service.YTMusic") as mock_yt,
     ):
         mock_client = MagicMock()
-        mock_client.get_account_info.return_value = {"accountName": "user"}
+        mock_client.get_artist.return_value = {"channelId": "UCtest", "name": "Test"}
         mock_yt.return_value = mock_client
         svc.login()
 
@@ -374,15 +374,6 @@ def test_browser_auth_expired_interactive_reauth(browser_svc):
     auth_file = tmp_path / "browser_auth.json"
     auth_file.write_text("{}")
 
-    call_count = 0
-
-    def get_account_side_effect():
-        nonlocal call_count
-        call_count += 1
-        if call_count == 1:
-            raise YTMusicServerError("401 Unauthorized")
-        return {"accountName": "user"}
-
     with (
         patch("shuffleupagus.services.youtube.service.get_filepath", return_value=str(auth_file)),
         patch("shuffleupagus.services.youtube.service.YTMusic") as mock_yt,
@@ -391,9 +382,9 @@ def test_browser_auth_expired_interactive_reauth(browser_svc):
     ):
         mock_sys.stdin.isatty.return_value = True
         mock_client_bad = MagicMock()
-        mock_client_bad.get_account_info.side_effect = YTMusicServerError("401")
+        mock_client_bad.get_artist.side_effect = YTMusicServerError("400")
         mock_client_good = MagicMock()
-        mock_client_good.get_account_info.return_value = {"accountName": "user"}
+        mock_client_good.get_artist.return_value = {"channelId": "UCtest", "name": "Test"}
         mock_yt.side_effect = [mock_client_bad, mock_client_good]
 
         svc.login()
@@ -415,9 +406,9 @@ def test_browser_auth_expired_env_var(browser_svc, monkeypatch):
         patch("shuffleupagus.services.youtube.service.ytmusicapi.setup") as mock_setup,
     ):
         mock_client_bad = MagicMock()
-        mock_client_bad.get_account_info.side_effect = YTMusicServerError("401")
+        mock_client_bad.get_artist.side_effect = YTMusicServerError("400")
         mock_client_good = MagicMock()
-        mock_client_good.get_account_info.return_value = {"accountName": "user"}
+        mock_client_good.get_artist.return_value = {"channelId": "UCtest", "name": "Test"}
         mock_yt.side_effect = [mock_client_bad, mock_client_good]
 
         svc.login()
@@ -439,7 +430,7 @@ def test_browser_auth_expired_no_tty(browser_svc, monkeypatch):
     ):
         mock_sys.stdin.isatty.return_value = False
         mock_client = MagicMock()
-        mock_client.get_account_info.side_effect = YTMusicServerError("401")
+        mock_client.get_artist.side_effect = YTMusicServerError("400")
         mock_yt.return_value = mock_client
 
         with pytest.raises(ValueError, match="re-auth failed"):
@@ -462,7 +453,7 @@ def test_browser_auth_missing_file(browser_svc):
         # setup creates the file as a side effect
         mock_setup.side_effect = lambda **kw: Path(kw["filepath"]).write_text("{}")
         mock_client = MagicMock()
-        mock_client.get_account_info.return_value = {"accountName": "user"}
+        mock_client.get_artist.return_value = {"channelId": "UCtest", "name": "Test"}
         mock_yt.return_value = mock_client
 
         svc.login()

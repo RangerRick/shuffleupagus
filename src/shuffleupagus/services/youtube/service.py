@@ -68,9 +68,12 @@ class YoutubeService(Service):
                 self.client = YTMusic(str(auth_file))
 
     def _validate_browser_auth(self) -> bool:
-        """Check whether browser cookies are still valid."""
+        """Check whether browser cookies are still valid by hitting the browse endpoint."""
         try:
-            self.client.get_account_info()
+            # get_account_info can return 200 with degraded data on expired
+            # cookies; get_artist uses the browse endpoint which returns 400
+            # when auth is actually invalid — a much more reliable signal.
+            self.client.get_artist("UCMDQxm7cUx3yXkFeHa5zrBA")  # Taylor Swift
         except YTMusicServerError, YTMusicUserError, KeyError, Exception:
             return False
         return True
