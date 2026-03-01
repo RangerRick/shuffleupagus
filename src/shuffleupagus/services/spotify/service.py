@@ -18,6 +18,22 @@ _FINGERPRINT_TTL = 60 * 60 * 24  # 24 hours
 _REQUEST_TIMEOUT = 30
 
 
+def _format_rate_limit(exc: Exception) -> str:
+    """Build a human-readable rate-limit message from a 429 exception."""
+    headers = getattr(exc, "headers", None) or {}
+    retry_after = int(headers.get("Retry-After", 0))
+    if retry_after > 0:
+        retry_time = datetime.datetime.now(tz=datetime.UTC).astimezone() + datetime.timedelta(seconds=retry_after)
+        hours = retry_after // 3600
+        minutes = (retry_after % 3600) // 60
+        return (
+            f"Spotify rate-limited. Try again after "
+            f"{retry_time.strftime('%Y-%m-%d %H:%M')} "
+            f"({hours}h {minutes}m from now)"
+        )
+    return "Spotify rate-limited (no Retry-After header). Try again later."
+
+
 class SpotifyService(Service):
     name = "spotify"
 
@@ -100,14 +116,7 @@ class SpotifyService(Service):
                 status = getattr(e, "http_status", None)
                 msg = str(e)
                 if status == 429 or "429" in msg:
-                    retry_after = int(getattr(e, "headers", {}).get("Retry-After", 0))
-                    retry_time = datetime.datetime.now(tz=datetime.UTC).astimezone() + datetime.timedelta(
-                        seconds=retry_after
-                    )
-                    self._rate_limited = (
-                        f"Spotify rate-limited. Try again after {retry_time.strftime('%Y-%m-%d %H:%M')} "
-                        f"({retry_after // 3600}h {(retry_after % 3600) // 60}m from now)"
-                    )
+                    self._rate_limited = _format_rate_limit(e)
                     raise RuntimeError(self._rate_limited) from e
                 raise
 
