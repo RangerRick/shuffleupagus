@@ -289,19 +289,21 @@ class AppleMusicService(Service):
         scpt.run()
 
         logger.info(f"{self.tag}  * waiting for Music.app to process the deletion")
-        max_wait = 120  # seconds
-        waited = 0
-        count = self.__get_playlist_length(playlist_id)
-        while count > 0 and waited < max_wait:
+        count_scpt = applescript.AppleScript(
+            '''
+            tell application "Music"
+                set thePlaylist to (get playlist "'''
+            + playlist_name
+            + """")
+                return count of tracks of thePlaylist
+            end tell
+        """
+        )
+        count = int(count_scpt.run())
+        while count > 0:
             time.sleep(2)
-            waited += 2
-            count = self.__get_playlist_length(playlist_id)
+            count = int(count_scpt.run())
             logger.info(f"{self.tag}    * {count} track(s) remaining...")
-        if count > 0:
-            logger.warning(
-                f"{self.tag}  ! API still reports {count} tracks after {max_wait}s "
-                "(cloud sync may be lagging), proceeding with add"
-            )
 
         playlist_tracks = copy.deepcopy(apple_tracks)
 

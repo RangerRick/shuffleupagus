@@ -302,17 +302,29 @@ def test_get_playlist_id_for_name_not_found(svc):
 # ---------------------------------------------------------------------------
 
 
+def _mock_applescripts():
+    """Create AppleScript mock that returns None for delete, 0 for count."""
+    scripts = []
+
+    def make_script(*_args, **_kwargs):
+        mock = MagicMock()
+        scripts.append(mock)
+        # First script is the delete (returns None), second is the count (returns 0)
+        mock.run.return_value = None if len(scripts) == 1 else 0
+        return mock
+
+    return make_script
+
+
 def test_sync(svc):
     svc.get_playlist_id_for_name = MagicMock(return_value="pl1")
-    svc._AppleMusicService__get_playlist_length = MagicMock(return_value=0)
 
     post_resp = MagicMock()
     post_resp.status_code = 204
     svc.client._session.post.return_value = post_resp
     svc.client._auth_headers.return_value = {}
 
-    with patch("shuffleupagus.services.appleMusic.service.applescript.AppleScript") as mock_script:
-        mock_script.return_value.run.return_value = None
+    with patch("shuffleupagus.services.appleMusic.service.applescript.AppleScript", side_effect=_mock_applescripts()):
         svc.sync("Playlist", ["t1", "t2", "t3"])
 
     svc.client._session.post.assert_called()
@@ -322,7 +334,6 @@ def test_sync(svc):
 
 def test_sync_batches_tracks(svc):
     svc.get_playlist_id_for_name = MagicMock(return_value="pl1")
-    svc._AppleMusicService__get_playlist_length = MagicMock(return_value=0)
 
     post_resp = MagicMock()
     post_resp.status_code = 204
@@ -330,8 +341,7 @@ def test_sync_batches_tracks(svc):
     svc.client._auth_headers.return_value = {}
 
     tracks = [f"t{i}" for i in range(90)]
-    with patch("shuffleupagus.services.appleMusic.service.applescript.AppleScript") as mock_script:
-        mock_script.return_value.run.return_value = None
+    with patch("shuffleupagus.services.appleMusic.service.applescript.AppleScript", side_effect=_mock_applescripts()):
         svc.sync("Playlist", tracks)
 
     # 90 tracks → 2 batches of 80 and 10
