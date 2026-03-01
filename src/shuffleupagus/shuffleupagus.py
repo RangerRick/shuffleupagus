@@ -29,6 +29,7 @@ def _finalize_service(
     """Generate final playlist and sync (fast, runs sequentially)."""
     vips = [service.sanitize_id(a) for a in config.vip_artists(service.name)]
     playlist_track_ids = service.generate_playlist(artist_playlists, vips)
+    logger.info(f"{service.tag}* generated playlist with {len(playlist_track_ids)} tracks")
 
     if args.dry_run:
         logger.info(f"{service.tag}* DRY RUN mode, not updating playlist on {service.name}")

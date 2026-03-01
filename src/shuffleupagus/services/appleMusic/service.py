@@ -262,7 +262,11 @@ class AppleMusicService(Service):
         raise Exception(f"Failed to fetch playlist ID for {playlist_name} after 3 retries")
 
     def sync(self, playlist_name: str, tracks: list[str] | None = None):
-        apple_tracks = list(map(lambda track: {"id": track, "type": "songs"}, tracks or []))
+        if not tracks:
+            logger.warning(f"{self.tag}  ! sync called with no tracks, skipping")
+            return
+
+        apple_tracks = [{"id": track, "type": "songs"} for track in tracks]
 
         logger.info(f"{self.tag}  * determining playlist id for {playlist_name}")
         playlist_id = self.get_playlist_id_for_name(playlist_name)
@@ -311,11 +315,12 @@ class AppleMusicService(Service):
                     timeout=self.client.session_length,
                     json=payload,
                 )
-                if r.status_code >= 200 and r.status_code < 300:
+                if 200 <= r.status_code < 300:
+                    logger.debug(f"{self.tag}  * added batch of {len(batch)} tracks ({r.status_code})")
                     break
 
-                logger.warning(f"{self.tag}{r.status_code} {r.reason}")
+                logger.warning(f"{self.tag}  ! {r.status_code} {r.reason}")
                 if len(r.text.strip()) > 0:
-                    logger.warning(f"{self.tag}{r.text}")
+                    logger.warning(f"{self.tag}  ! {r.text}")
                 if retries == 0:
-                    raise Exception("Failed to add tracks to playlist after 3 retries")
+                    raise RuntimeError(f"Failed to add tracks to playlist after 3 retries: {r.status_code}")
