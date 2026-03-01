@@ -4,8 +4,10 @@ import sys
 import threading
 from concurrent.futures import as_completed
 
+import requests.adapters
 import spotipy
 from spotipy.oauth2 import SpotifyOAuth
+from urllib3.util.retry import Retry
 
 from ...core.model import Album, Artist, Service, Track
 from ...core.util import logger
@@ -62,6 +64,14 @@ class SpotifyService(Service):
             retries=0,
             status_retries=0,
         )
+        # Disable urllib3's special 429 handling so the response (with
+        # Retry-After header) flows through as a normal HTTPError instead
+        # of being swallowed into a headerless MaxRetryError.
+        retry = Retry(total=0, respect_retry_after_header=False)
+        adapter = requests.adapters.HTTPAdapter(max_retries=retry)
+        session: requests.Session = self.spotify._session  # type: ignore[assignment]
+        session.mount("https://", adapter)
+        session.mount("http://", adapter)
         self._acquire_token(creds)
 
     def _acquire_token(self, creds: SpotifyOAuth):
