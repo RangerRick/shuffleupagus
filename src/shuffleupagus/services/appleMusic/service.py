@@ -321,58 +321,60 @@ class AppleMusicService(Service):
             count = int(count_scpt.run())
             logger.info(f"{self.tag}    * {count} track(s) remaining...")
 
-    def __add_tracks(self, playlist_id: str, track_ids: list[str]) -> None:
-        """POST tracks to the playlist in batches of 80."""
+    def __post_batch(self, playlist_id: str, track_ids: list[str]) -> None:
+        """POST a single batch of tracks (≤80) with retries."""
         url = f"https://api.music.apple.com/v1/me/library/playlists/{playlist_id}/tracks"
-        remaining = [{"id": tid, "type": "songs"} for tid in track_ids]
-        while remaining:
-            batch = remaining[:80]
-            remaining = remaining[80:]
-            payload = {"data": batch}
-            retries = 3
-            while retries > 0:
-                retries -= 1
-                r = self.client._session.post(
-                    url,
-                    headers=self.__get_media_headers(),
-                    proxies=self.client.proxies,
-                    timeout=self.client.session_length,
-                    json=payload,
-                )
-                if 200 <= r.status_code < 300:
-                    logger.debug(f"{self.tag}  * added batch of {len(batch)} tracks")
-                    break
-                logger.warning(f"{self.tag}  ! request failed ({r.status_code} {r.reason})")
-                if r.text.strip():
-                    logger.warning(f"{self.tag}  ! {r.text}")
-                if retries == 0:
-                    raise RuntimeError(f"Failed to add tracks after 3 retries ({r.status_code} {r.reason})")
-
-    def __verify_and_retry(
-        self,
-        playlist_id: str,
-        expected: list[str],
-        max_retries: int = 2,
-    ) -> None:
-        """Read back the playlist and re-add any silently dropped tracks."""
-        expected_set = set(expected)
-        for attempt in range(1, max_retries + 1):
-            time.sleep(5)
-            actual = self.__get_playlist_tracks(playlist_id)
-            missing = expected_set - set(actual)
-            if not missing:
-                logger.info(f"{self.tag}  * verified: all {len(expected)} tracks present")
+        payload = {"data": [{"id": tid, "type": "songs"} for tid in track_ids]}
+        retries = 3
+        while retries > 0:
+            retries -= 1
+            r = self.client._session.post(
+                url,
+                headers=self.__get_media_headers(),
+                proxies=self.client.proxies,
+                timeout=self.client.session_length,
+                json=payload,
+            )
+            if 200 <= r.status_code < 300:
+                logger.debug(f"{self.tag}  * added batch of {len(track_ids)} tracks")
                 return
-            logger.warning(f"{self.tag}  ! verify attempt {attempt}: {len(missing)} tracks missing, retrying")
-            self.__add_tracks(playlist_id, list(missing))
-        # Final check
-        time.sleep(5)
-        actual = self.__get_playlist_tracks(playlist_id)
-        still_missing = expected_set - set(actual)
-        if still_missing:
-            logger.warning(f"{self.tag}  ! {len(still_missing)} tracks still missing after {max_retries} retries")
-        else:
-            logger.info(f"{self.tag}  * verified: all {len(expected)} tracks present")
+            logger.warning(f"{self.tag}  ! request failed ({r.status_code} {r.reason})")
+            if r.text.strip():
+                logger.warning(f"{self.tag}  ! {r.text}")
+            if retries == 0:
+                raise RuntimeError(f"Failed to add tracks after 3 retries ({r.status_code} {r.reason})")
+
+    def __add_tracks(self, playlist_id: str, track_ids: list[str], verify: bool = True) -> None:
+        """Add tracks in batches of 80, verifying after each batch."""
+        for i in range(0, len(track_ids), 80):
+            batch = track_ids[i : i + 80]
+            self.__post_batch(playlist_id, batch)
+
+            if not verify:
+                continue
+
+            # Verify all tracks added so far are present
+            expected_so_far = set(track_ids[: i + 80])
+            for attempt in range(3):
+                time.sleep(5)
+                actual = set(self.__get_playlist_tracks(playlist_id))
+                missing = expected_so_far - actual
+                if not missing:
+                    logger.info(f"{self.tag}  * verified batch {i // 80 + 1}: {len(expected_so_far)} tracks present")
+                    break
+                logger.warning(
+                    f"{self.tag}  ! batch {i // 80 + 1} verify attempt {attempt + 1}:"
+                    f" {len(missing)} tracks missing, retrying"
+                )
+                self.__post_batch(playlist_id, list(missing))
+            else:
+                time.sleep(5)
+                actual = set(self.__get_playlist_tracks(playlist_id))
+                still_missing = expected_so_far - actual
+                if still_missing:
+                    logger.warning(
+                        f"{self.tag}  ! batch {i // 80 + 1}: {len(still_missing)} tracks still missing after retries"
+                    )
 
     def sync(self, playlist_name: str, tracks: list[str] | None = None):
         if not tracks:
@@ -405,4 +407,3 @@ class AppleMusicService(Service):
 
         logger.info(f"{self.tag}  * publishing {len(tracks)} songs to the playlist")
         self.__add_tracks(playlist_id, tracks)
-        self.__verify_and_retry(playlist_id, tracks)

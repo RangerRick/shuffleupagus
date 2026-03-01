@@ -329,7 +329,7 @@ def _stub_get_playlist_length(svc, value=0):
 
 def test_sync(svc):
     svc.get_playlist_id_for_name = MagicMock(return_value="pl1")
-    # First call: empty (no skip), then verification returns all tracks
+    # sync reads current (empty), then per-batch verify returns all tracks
     _stub_get_playlist_tracks(svc, [[], ["t1", "t2", "t3"]])
 
     post_resp = MagicMock()
@@ -348,8 +348,9 @@ def test_sync(svc):
 def test_sync_batches_tracks(svc):
     svc.get_playlist_id_for_name = MagicMock(return_value="pl1")
     tracks = [f"t{i}" for i in range(90)]
-    # First call: empty (no skip), then verification returns all tracks
-    _stub_get_playlist_tracks(svc, [[], tracks])
+    batch1 = tracks[:80]
+    # sync reads current (empty), verify after batch 1, verify after batch 2
+    _stub_get_playlist_tracks(svc, [[], batch1, tracks])
 
     post_resp = MagicMock()
     post_resp.status_code = 204
@@ -377,7 +378,7 @@ def test_sync_skips_when_unchanged(svc):
 def test_sync_clears_and_waits_for_cloud(svc):
     """When playlist is non-empty but different, clear + wait for cloud."""
     svc.get_playlist_id_for_name = MagicMock(return_value="pl1")
-    # First read: stale tracks; cloud length poll: 0; verification: all good
+    # First read: stale tracks; cloud length poll returns 0; per-batch verify: all good
     _stub_get_playlist_tracks(svc, [["old1"], ["t1", "t2"]])
     _stub_get_playlist_length(svc, 0)
 
@@ -398,12 +399,11 @@ def test_sync_clears_and_waits_for_cloud(svc):
     svc.client._session.post.assert_called()
 
 
-def test_sync_verify_retries_missing(svc):
-    """Verification detects missing tracks and retries only those."""
+def test_sync_verify_retries_missing_in_batch(svc):
+    """Per-batch verification detects missing tracks and retries only those."""
     svc.get_playlist_id_for_name = MagicMock(return_value="pl1")
-    # First read: empty (no clear needed)
-    # Verify attempt 1: missing t3
-    # Verify attempt 2 (final check): all present
+    # sync reads current: empty (no clear)
+    # batch 1 posts [t1, t2, t3], verify sees [t1, t2], retry adds t3, verify sees all
     _stub_get_playlist_tracks(svc, [[], ["t1", "t2"], ["t1", "t2", "t3"]])
 
     post_resp = MagicMock()
@@ -414,7 +414,7 @@ def test_sync_verify_retries_missing(svc):
     with patch("shuffleupagus.services.appleMusic.service.time.sleep"):
         svc.sync("Playlist", ["t1", "t2", "t3"])
 
-    # First add (full batch) + retry (just t3)
+    # Initial batch + retry of missing t3
     assert svc.client._session.post.call_count == 2
 
 
