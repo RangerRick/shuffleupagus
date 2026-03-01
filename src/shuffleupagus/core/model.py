@@ -109,26 +109,30 @@ class Track(ShufObject):
         return self.duration_ms > duration_ms
 
 
-_DEFAULT_POOL_WORKERS = 8
+_ARTIST_POOL_WORKERS = 4
+_ALBUM_POOL_WORKERS = 8
 
 
 class Service:
     name: str
     cache: Cache
     cache_cutoff: float = CACHE_DEFAULT_CUTOFF
-    executor: ThreadPoolExecutor | None = None
-    _default_executor: ThreadPoolExecutor | None = None
+    _artist_pool: ThreadPoolExecutor | None = None
+    _album_pool: ThreadPoolExecutor | None = None
 
     @property
-    def pool(self) -> ThreadPoolExecutor:
-        """Shared executor if set, otherwise a lazily-created default."""
-        if self.executor is not None:
-            return self.executor
-        if self._default_executor is None:
-            self._default_executor = ThreadPoolExecutor(
-                max_workers=_DEFAULT_POOL_WORKERS,
-            )
-        return self._default_executor
+    def artist_pool(self) -> ThreadPoolExecutor:
+        """Per-service artist pool, lazily created."""
+        if self._artist_pool is None:
+            self._artist_pool = ThreadPoolExecutor(max_workers=_ARTIST_POOL_WORKERS)
+        return self._artist_pool
+
+    @property
+    def album_pool(self) -> ThreadPoolExecutor:
+        """Per-service album pool, lazily created."""
+        if self._album_pool is None:
+            self._album_pool = ThreadPoolExecutor(max_workers=_ALBUM_POOL_WORKERS)
+        return self._album_pool
 
     def __init__(self, config: Config):
         svc_config = config.service(self.name)
@@ -194,14 +198,16 @@ class Service:
         _vip_artist_ids: list[str] = [] if vip_artist_ids is None else vip_artist_ids
         artist_playlists: dict[str, list[Track]] = {}
         total = len(_artist_ids)
+        logger.info(f"{self.tag}* generating playlist for {total} artists")
 
         def _process(idx: int, artist_id: str) -> tuple[str, list[Track]]:
-            artist = self.get_artist(artist_id)
             tag = self.tag
+            logger.info(f"{tag}* [{idx + 1}/{total}] fetching {artist_id}")
+            artist = self.get_artist(artist_id)
             if artist is None:
                 logger.warning(f"{tag}  ! artist {artist_id} not found, skipping")
                 return artist_id, []
-            logger.info(f"{tag}* processing artist {artist.name} ({idx + 1}/{total})")
+            logger.info(f"{tag}* [{idx + 1}/{total}] processing {artist.name}")
 
             top_tracks = self.get_artist_top_tracks(artist)
             top_tracks = [
@@ -246,7 +252,7 @@ class Service:
             random.shuffle(playlist)
             return artist_id, playlist
 
-        futures = {self.pool.submit(_process, idx, artist_id): artist_id for idx, artist_id in enumerate(_artist_ids)}
+        futures = {self.artist_pool.submit(_process, idx, aid): aid for idx, aid in enumerate(_artist_ids)}
         for future in as_completed(futures):
             artist_id = futures[future]
             try:

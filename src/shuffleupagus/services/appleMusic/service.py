@@ -97,7 +97,7 @@ class AppleMusicService(Service):
                     ret = albums
                     self.cache.write(cache_key, ret)
             except Exception as e:
-                logger.error(f"{self.tag}  ! error fetching artist albums: {e}")
+                logger.warning(f"{self.tag}  ! error fetching albums for {artist.name} ({artist.id}): {e}")
 
         if ret is None or "data" not in ret or len(ret["data"]) == 0:
             return []
@@ -173,7 +173,7 @@ class AppleMusicService(Service):
             return []
 
         tracks: list[Track] = []
-        futures = {self.pool.submit(self.get_album_tracks, album, artist): album for album in albums}
+        futures = {self.album_pool.submit(self.get_album_tracks, album, artist): album for album in albums}
         for future in as_completed(futures):
             album = futures[future]
             try:

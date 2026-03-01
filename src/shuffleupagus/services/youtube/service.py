@@ -31,7 +31,8 @@ class YoutubeService(Service):
     name = "youtube"
     cache_cutoff = 60 * 60 * 24 * 90  # 90 days — artist/album data is stable; keeps cache warm across OAuth refreshes
 
-    client: YTMusic
+    client: YTMusic  # browser-auth client for browsing artists/albums
+    _oauth_client: YTMusic | None = None  # OAuth client for Data API (playlist sync)
 
     def _require_config(self, key: str) -> str:
         val = self.config.get(key)
@@ -101,9 +102,13 @@ class YoutubeService(Service):
         )
 
     def login(self):
-        auth_file = self._auth_file()
+        # Browser-auth client for browsing artists/albums (always needed)
+        browser_file = self._browser_auth_file()
+        self.client = YTMusic(str(browser_file))
 
+        # OAuth client for Data API playlist management (optional)
         if not self._is_browser_auth():
+            auth_file = self._auth_file()
             client_id = self._require_config("client-id")
             client_secret = self._require_config("client-secret")
             creds = OAuthCredentials(client_id, client_secret)
@@ -111,13 +116,12 @@ class YoutubeService(Service):
                 logger.warning(f"{self.tag}* YouTube auth token missing or not OAuth format; starting login flow")
                 self._prompt_for_oauth(creds, auth_file)
             try:
-                self.client = YTMusic(str(auth_file), oauth_credentials=creds)
+                self._oauth_client = YTMusic(str(auth_file), oauth_credentials=creds)
             except YTMusicServerError:
                 logger.warning(f"{self.tag}* YouTube auth token invalid; starting login flow")
                 self._prompt_for_oauth(creds, auth_file)
-                self.client = YTMusic(str(auth_file), oauth_credentials=creds)
-        else:
-            self.client = YTMusic(str(auth_file))
+                self._oauth_client = YTMusic(str(auth_file), oauth_credentials=creds)
+        logger.info(f"{self.tag}* logged in")
 
     def _validate_browser_auth(self, client: YTMusic) -> bool:
         """Check whether browser cookies are still valid by hitting the browse endpoint."""
@@ -195,7 +199,8 @@ class YoutubeService(Service):
 
     def _get_access_token(self) -> str | None:
         """Return the current OAuth access token, auto-refreshing if needed. None if not OAuth."""
-        token = getattr(self.client, "_token", None)
+        client = self._oauth_client or self.client
+        token = getattr(client, "_token", None)
         if token is not None:
             return token.access_token
         return None
@@ -285,9 +290,10 @@ class YoutubeService(Service):
             if m:
                 handle = m.group(1)  # e.g. "/@artistname"
 
-        self.cache.write("channel:" + artist, channel_id)
+        permanent = 60 * 60 * 24 * 365 * 10.0  # ~10 years
+        self.cache.write("channel:" + artist, channel_id, ttl=permanent)
         if handle:
-            self.cache.write("channel:handle:" + channel_id, handle)
+            self.cache.write("channel:handle:" + channel_id, handle, ttl=permanent)
 
         logger.debug(f"{self.tag}* resolved {artist} to channel ID: {channel_id} (handle: {handle})")
         return channel_id, handle
@@ -343,7 +349,14 @@ class YoutubeService(Service):
         cache_key = "album:" + album_id
         ret = self.cache.read(cache_key)
         if not ret:
-            ret = self.client.get_album(album_id)
+            try:
+                ret = self.client.get_album(album_id)
+            except (KeyError, YTMusicServerError) as e:
+                if "400" in str(e):
+                    raise ValueError(
+                        f"YouTube Music API returned HTTP 400 for album {album_id}",
+                    ) from e
+                raise
             self.cache.write(cache_key, ret)
 
         return YoutubeAlbum.from_dict(ret)
@@ -377,8 +390,13 @@ class YoutubeService(Service):
 
         if ret is None:
             if albums_browse_id is not None and albums_params is not None:
-                # artist has a paginated album list; fetch all
-                ret = self.client.get_artist_albums(albums_browse_id, albums_params, limit=100)
+                try:
+                    ret = self.client.get_artist_albums(albums_browse_id, albums_params, limit=100)
+                except (KeyError, YTMusicServerError) as e:
+                    logger.warning(
+                        f"{self.tag}* HTTP error fetching album list for {artist.name}: {e}",
+                    )
+                    return []
             elif artist.inlineAlbums:
                 # all albums are already embedded in the get_artist response
                 ret = artist.inlineAlbums
@@ -400,7 +418,13 @@ class YoutubeService(Service):
         cache_key = "album:" + album.id
         ret = self.cache.read(cache_key)
         if not ret:
-            ret = self.client.get_album(album.id)
+            try:
+                ret = self.client.get_album(album.id)
+            except KeyError, YTMusicServerError:
+                logger.warning(
+                    f"{self.tag}* HTTP 400 fetching album '{album.name}' ({album.id}), skipping",
+                )
+                return []
             self.cache.write(cache_key, ret)
 
         tracks: list[Track] = []
@@ -427,7 +451,7 @@ class YoutubeService(Service):
             return []
 
         tracks: list[Track] = []
-        futures = {self.pool.submit(self.get_album_tracks, album): album for album in albums}
+        futures = {self.album_pool.submit(self.get_album_tracks, album): album for album in albums}
         for future in as_completed(futures):
             album = futures[future]
             try:

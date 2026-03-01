@@ -1,7 +1,7 @@
 import argparse
 import os
 import signal
-from concurrent.futures import ThreadPoolExecutor, as_completed
+import threading
 
 from .core.config import Config
 from .core.model import Service
@@ -89,8 +89,6 @@ def main():
     for service in services:
         service.preflight()
 
-    executor = ThreadPoolExecutor(max_workers=16)
-
     def _handle_sigint(_signum, _frame):
         logger.warning("* interrupted, exiting")
         os._exit(130)
@@ -98,24 +96,23 @@ def main():
     prev_handler = signal.signal(signal.SIGINT, _handle_sigint)
 
     errors: list[tuple[str, Exception]] = []
-    try:
-        for service in services:
-            service.executor = executor
 
-        futures = {executor.submit(_run_service, service, config, args): service for service in services}
-        for future in as_completed(futures):
-            service = futures[future]
-            try:
-                future.result()
-            except Exception as exc:
-                logger.exception(
-                    f"Service {service.name} raised an exception",
-                )
-                errors.append((service.name, exc))
+    def _worker(service):
+        try:
+            _run_service(service, config, args)
+        except Exception as exc:
+            logger.exception(f"Service {service.name} raised an exception")
+            errors.append((service.name, exc))
+
+    threads = [threading.Thread(target=_worker, args=(svc,)) for svc in services]
+    try:
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
     finally:
         for service in services:
             service.close()
-        executor.shutdown(wait=True)
         signal.signal(signal.SIGINT, prev_handler)
 
     if errors:

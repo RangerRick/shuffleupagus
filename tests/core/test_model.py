@@ -135,7 +135,7 @@ class _StubService:
     """Minimal Service-like object that calls generate_playlist directly."""
 
     tag = "[test] "
-    pool = ThreadPoolExecutor(max_workers=2)
+    artist_pool = ThreadPoolExecutor(max_workers=4)
 
     def get_artist(self, artist):
         return Artist(artist, artist)

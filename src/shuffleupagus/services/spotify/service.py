@@ -146,7 +146,7 @@ class SpotifyService(Service):
             return []
 
         tracks: list[Track] = []
-        futures = {self.pool.submit(self.get_album_tracks, album): album for album in albums}
+        futures = {self.album_pool.submit(self.get_album_tracks, album): album for album in albums}
         for future in as_completed(futures):
             album = futures[future]
             try:
