@@ -316,15 +316,28 @@ def _mock_applescripts():
     return make_script
 
 
+def _stub_get_playlist_tracks(svc, return_values):
+    """Patch __get_playlist_tracks to return successive values."""
+    it = iter(return_values)
+    svc._AppleMusicService__get_playlist_tracks = MagicMock(side_effect=lambda _pid: next(it))
+
+
+def _stub_get_playlist_length(svc, value=0):
+    """Patch __get_playlist_length to return a fixed value."""
+    svc._AppleMusicService__get_playlist_length = MagicMock(return_value=value)
+
+
 def test_sync(svc):
     svc.get_playlist_id_for_name = MagicMock(return_value="pl1")
+    # First call: empty (no skip), then verification returns all tracks
+    _stub_get_playlist_tracks(svc, [[], ["t1", "t2", "t3"]])
 
     post_resp = MagicMock()
     post_resp.status_code = 204
     svc.client._session.post.return_value = post_resp
     svc.client._auth_headers.return_value = {}
 
-    with patch("shuffleupagus.services.appleMusic.service.applescript.AppleScript", side_effect=_mock_applescripts()):
+    with patch("shuffleupagus.services.appleMusic.service.time.sleep"):
         svc.sync("Playlist", ["t1", "t2", "t3"])
 
     svc.client._session.post.assert_called()
@@ -334,15 +347,117 @@ def test_sync(svc):
 
 def test_sync_batches_tracks(svc):
     svc.get_playlist_id_for_name = MagicMock(return_value="pl1")
+    tracks = [f"t{i}" for i in range(90)]
+    # First call: empty (no skip), then verification returns all tracks
+    _stub_get_playlist_tracks(svc, [[], tracks])
 
     post_resp = MagicMock()
     post_resp.status_code = 204
     svc.client._session.post.return_value = post_resp
     svc.client._auth_headers.return_value = {}
 
-    tracks = [f"t{i}" for i in range(90)]
-    with patch("shuffleupagus.services.appleMusic.service.applescript.AppleScript", side_effect=_mock_applescripts()):
+    with patch("shuffleupagus.services.appleMusic.service.time.sleep"):
         svc.sync("Playlist", tracks)
 
     # 90 tracks → 2 batches of 80 and 10
     assert svc.client._session.post.call_count == 2
+
+
+def test_sync_skips_when_unchanged(svc):
+    """When playlist already matches desired, no AppleScript or POST calls."""
+    svc.get_playlist_id_for_name = MagicMock(return_value="pl1")
+    _stub_get_playlist_tracks(svc, [["t1", "t2", "t3"]])
+    svc.client._auth_headers.return_value = {}
+
+    svc.sync("Playlist", ["t1", "t2", "t3"])
+
+    svc.client._session.post.assert_not_called()
+
+
+def test_sync_clears_and_waits_for_cloud(svc):
+    """When playlist is non-empty but different, clear + wait for cloud."""
+    svc.get_playlist_id_for_name = MagicMock(return_value="pl1")
+    # First read: stale tracks; cloud length poll: 0; verification: all good
+    _stub_get_playlist_tracks(svc, [["old1"], ["t1", "t2"]])
+    _stub_get_playlist_length(svc, 0)
+
+    post_resp = MagicMock()
+    post_resp.status_code = 204
+    svc.client._session.post.return_value = post_resp
+    svc.client._auth_headers.return_value = {}
+
+    with (
+        patch(
+            "shuffleupagus.services.appleMusic.service.applescript.AppleScript",
+            side_effect=_mock_applescripts(),
+        ),
+        patch("shuffleupagus.services.appleMusic.service.time.sleep"),
+    ):
+        svc.sync("Playlist", ["t1", "t2"])
+
+    svc.client._session.post.assert_called()
+
+
+def test_sync_verify_retries_missing(svc):
+    """Verification detects missing tracks and retries only those."""
+    svc.get_playlist_id_for_name = MagicMock(return_value="pl1")
+    # First read: empty (no clear needed)
+    # Verify attempt 1: missing t3
+    # Verify attempt 2 (final check): all present
+    _stub_get_playlist_tracks(svc, [[], ["t1", "t2"], ["t1", "t2", "t3"]])
+
+    post_resp = MagicMock()
+    post_resp.status_code = 204
+    svc.client._session.post.return_value = post_resp
+    svc.client._auth_headers.return_value = {}
+
+    with patch("shuffleupagus.services.appleMusic.service.time.sleep"):
+        svc.sync("Playlist", ["t1", "t2", "t3"])
+
+    # First add (full batch) + retry (just t3)
+    assert svc.client._session.post.call_count == 2
+
+
+# ---------------------------------------------------------------------------
+# __get_playlist_tracks
+# ---------------------------------------------------------------------------
+
+
+def test_get_playlist_tracks_pagination(svc):
+    """Follow pagination to collect all catalog IDs."""
+    svc.client._auth_headers.return_value = {}
+
+    page1 = MagicMock()
+    page1.status_code = 200
+    page1.json.return_value = {
+        "data": [
+            {"attributes": {"playParams": {"catalogId": "c1"}}},
+            {"attributes": {"playParams": {"catalogId": "c2"}}},
+        ],
+        "next": "/v1/me/library/playlists/pl1/tracks?offset=2",
+    }
+    page2 = MagicMock()
+    page2.status_code = 200
+    page2.json.return_value = {
+        "data": [
+            {"attributes": {"playParams": {"catalogId": "c3"}}},
+        ],
+    }
+    svc.client._session.get.side_effect = [page1, page2]
+
+    result = svc._AppleMusicService__get_playlist_tracks("pl1")
+    assert result == ["c1", "c2", "c3"]
+    assert svc.client._session.get.call_count == 2
+
+
+def test_get_playlist_tracks_empty_404(svc):
+    """API returns 404 with error 40403 for empty playlists."""
+    svc.client._auth_headers.return_value = {}
+
+    resp = MagicMock()
+    resp.status_code = 404
+    resp.json.return_value = {"errors": [{"code": "40403", "title": "No related resources"}]}
+    svc.client._session.get.return_value = resp
+
+    result = svc._AppleMusicService__get_playlist_tracks("pl1")
+    assert result == []

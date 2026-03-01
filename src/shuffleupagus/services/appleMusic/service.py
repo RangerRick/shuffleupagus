@@ -1,4 +1,3 @@
-import copy
 import os
 import time
 from concurrent.futures import as_completed
@@ -261,20 +260,37 @@ class AppleMusicService(Service):
 
         raise Exception(f"Failed to fetch playlist ID for {playlist_name} after 3 retries")
 
-    def sync(self, playlist_name: str, tracks: list[str] | None = None):
-        if not tracks:
-            logger.warning(f"{self.tag}  ! sync called with no tracks, skipping")
-            return
+    def __get_playlist_tracks(self, playlist_id: str) -> list[str]:
+        """Read all catalog IDs from a library playlist via the cloud API."""
+        catalog_ids: list[str] = []
+        url = f"https://api.music.apple.com/v1/me/library/playlists/{playlist_id}/tracks?limit=100"
+        while url:
+            r = self.client._session.get(
+                url,
+                headers=self.__get_media_headers(),
+                proxies=self.client.proxies,
+                timeout=self.client.session_length,
+            )
+            if r.status_code == 404:
+                body = r.json()
+                errors = body.get("errors", [])
+                if errors and errors[0].get("code") == "40403":
+                    return []
+                raise RuntimeError(f"Failed to read playlist tracks: {r.status_code}")
+            if not (200 <= r.status_code < 300):
+                raise RuntimeError(f"Failed to read playlist tracks: {r.status_code}")
+            body = r.json()
+            for item in body.get("data", []):
+                cat_id = item.get("attributes", {}).get("playParams", {}).get("catalogId")
+                if cat_id:
+                    catalog_ids.append(str(cat_id))
+            url = body.get("next")
+            if url and not url.startswith("http"):
+                url = f"https://api.music.apple.com{url}"
+        return catalog_ids
 
-        apple_tracks = [{"id": track, "type": "songs"} for track in tracks]
-
-        logger.info(f"{self.tag}  * determining playlist id for {playlist_name}")
-        playlist_id = self.get_playlist_id_for_name(playlist_name)
-        url = f"https://api.music.apple.com/v1/me/library/playlists/{playlist_id}"
-
-        logger.info(f"{self.tag}  * clearing existing tracks in playlist '{playlist_name}'")
-
-        # Clear existing tracks in the playlist
+    def __clear_playlist(self, playlist_name: str) -> None:
+        """Delete all tracks from a playlist via AppleScript and wait."""
         scpt = applescript.AppleScript(
             '''
             tell application "Music" to run
@@ -305,21 +321,19 @@ class AppleMusicService(Service):
             count = int(count_scpt.run())
             logger.info(f"{self.tag}    * {count} track(s) remaining...")
 
-        playlist_tracks = copy.deepcopy(apple_tracks)
-
-        logger.info(f"{self.tag}  * publishing {len(playlist_tracks)} songs to the playlist")
-        while len(playlist_tracks) > 0:
-            # Apple Music API allows a maximum of 100 tracks per request, do 80 just in case
-            batch = playlist_tracks[0:80]
-            del playlist_tracks[0:80]
-
+    def __add_tracks(self, playlist_id: str, track_ids: list[str]) -> None:
+        """POST tracks to the playlist in batches of 80."""
+        url = f"https://api.music.apple.com/v1/me/library/playlists/{playlist_id}/tracks"
+        remaining = [{"id": tid, "type": "songs"} for tid in track_ids]
+        while remaining:
+            batch = remaining[:80]
+            remaining = remaining[80:]
             payload = {"data": batch}
             retries = 3
             while retries > 0:
                 retries -= 1
-
                 r = self.client._session.post(
-                    url + "/tracks",
+                    url,
                     headers=self.__get_media_headers(),
                     proxies=self.client.proxies,
                     timeout=self.client.session_length,
@@ -328,9 +342,67 @@ class AppleMusicService(Service):
                 if 200 <= r.status_code < 300:
                     logger.debug(f"{self.tag}  * added batch of {len(batch)} tracks")
                     break
-
                 logger.warning(f"{self.tag}  ! request failed ({r.status_code} {r.reason})")
-                if len(r.text.strip()) > 0:
+                if r.text.strip():
                     logger.warning(f"{self.tag}  ! {r.text}")
                 if retries == 0:
-                    raise RuntimeError(f"Failed to add tracks to playlist after 3 retries ({r.status_code} {r.reason})")
+                    raise RuntimeError(f"Failed to add tracks after 3 retries ({r.status_code} {r.reason})")
+
+    def __verify_and_retry(
+        self,
+        playlist_id: str,
+        expected: list[str],
+        max_retries: int = 2,
+    ) -> None:
+        """Read back the playlist and re-add any silently dropped tracks."""
+        expected_set = set(expected)
+        for attempt in range(1, max_retries + 1):
+            time.sleep(5)
+            actual = self.__get_playlist_tracks(playlist_id)
+            missing = expected_set - set(actual)
+            if not missing:
+                logger.info(f"{self.tag}  * verified: all {len(expected)} tracks present")
+                return
+            logger.warning(f"{self.tag}  ! verify attempt {attempt}: {len(missing)} tracks missing, retrying")
+            self.__add_tracks(playlist_id, list(missing))
+        # Final check
+        time.sleep(5)
+        actual = self.__get_playlist_tracks(playlist_id)
+        still_missing = expected_set - set(actual)
+        if still_missing:
+            logger.warning(f"{self.tag}  ! {len(still_missing)} tracks still missing after {max_retries} retries")
+        else:
+            logger.info(f"{self.tag}  * verified: all {len(expected)} tracks present")
+
+    def sync(self, playlist_name: str, tracks: list[str] | None = None):
+        if not tracks:
+            logger.warning(f"{self.tag}  ! sync called with no tracks, skipping")
+            return
+
+        logger.info(f"{self.tag}  * determining playlist id for {playlist_name}")
+        playlist_id = self.get_playlist_id_for_name(playlist_name)
+
+        # Check if playlist already matches desired state
+        current = self.__get_playlist_tracks(playlist_id)
+        if current == tracks:
+            logger.info(f"{self.tag}  * playlist already matches ({len(tracks)} tracks), skipping sync")
+            return
+
+        # Clear if non-empty
+        if current:
+            logger.info(f"{self.tag}  * clearing existing tracks in playlist '{playlist_name}'")
+            self.__clear_playlist(playlist_name)
+
+            # Wait for cloud API to reflect the deletion
+            logger.info(f"{self.tag}  * waiting for cloud to process deletion")
+            for _ in range(6):
+                time.sleep(5)
+                cloud_count = self.__get_playlist_length(playlist_id)
+                if cloud_count == 0:
+                    break
+            else:
+                logger.warning(f"{self.tag}  ! cloud still shows tracks after 30s, proceeding anyway")
+
+        logger.info(f"{self.tag}  * publishing {len(tracks)} songs to the playlist")
+        self.__add_tracks(playlist_id, tracks)
+        self.__verify_and_retry(playlist_id, tracks)
