@@ -39,12 +39,32 @@ class YoutubeService(Service):
             raise ValueError(f"Missing required config key 'services.youtube.{key}'")
         return val
 
-    def login(self):
-        auth_file = Path(get_filepath(self._require_config("auth-file")))
-        client_id = self.config.get("client-id")
-        client_secret = self.config.get("client-secret")
+    def _is_browser_auth(self) -> bool:
+        return not (self.config.get("client-id") and self.config.get("client-secret"))
 
-        if client_id and client_secret:
+    def _auth_file(self) -> Path:
+        return Path(get_filepath(self._require_config("auth-file")))
+
+    def preflight(self):
+        if not self._is_browser_auth():
+            return
+        auth_file = self._auth_file()
+        if not auth_file.exists():
+            logger.warning(f"{self.tag}* no browser auth file found, starting setup")
+            if not self._setup_browser_auth(auth_file):
+                raise ValueError("YouTube browser auth setup failed")
+        client = YTMusic(str(auth_file))
+        if not self._validate_browser_auth(client):
+            logger.warning(f"{self.tag}* browser cookies expired, starting re-auth")
+            if not self._setup_browser_auth(auth_file):
+                raise ValueError("YouTube browser auth re-auth failed")
+
+    def login(self):
+        auth_file = self._auth_file()
+
+        if not self._is_browser_auth():
+            client_id = self._require_config("client-id")
+            client_secret = self._require_config("client-secret")
             creds = OAuthCredentials(client_id, client_secret)
             if self._load_oauth_token(auth_file) is None:
                 logger.warning(f"{self.tag}* YouTube auth token missing or not OAuth format; starting login flow")
@@ -56,24 +76,15 @@ class YoutubeService(Service):
                 self._prompt_for_oauth(creds, auth_file)
                 self.client = YTMusic(str(auth_file), oauth_credentials=creds)
         else:
-            if not auth_file.exists():
-                logger.warning(f"{self.tag}* no browser auth file found, starting setup")
-                if not self._setup_browser_auth(auth_file):
-                    raise ValueError("YouTube browser auth setup failed")
             self.client = YTMusic(str(auth_file))
-            if not self._validate_browser_auth():
-                logger.warning(f"{self.tag}* browser cookies expired, starting re-auth")
-                if not self._setup_browser_auth(auth_file):
-                    raise ValueError("YouTube browser auth re-auth failed")
-                self.client = YTMusic(str(auth_file))
 
-    def _validate_browser_auth(self) -> bool:
+    def _validate_browser_auth(self, client: YTMusic) -> bool:
         """Check whether browser cookies are still valid by hitting the browse endpoint."""
         try:
             # get_account_info can return 200 with degraded data on expired
             # cookies; get_artist uses the browse endpoint which returns 400
             # when auth is actually invalid — a much more reliable signal.
-            self.client.get_artist("UCMDQxm7cUx3yXkFeHa5zrBA")  # Taylor Swift
+            client.get_artist("UCMDQxm7cUx3yXkFeHa5zrBA")  # Taylor Swift
         except YTMusicServerError, YTMusicUserError, KeyError, Exception:
             return False
         return True

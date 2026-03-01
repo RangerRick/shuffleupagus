@@ -6,12 +6,9 @@ from .core.model import Service
 from .core.util import init_logging, load_plugins, logger
 
 
-def _run_service(plugin, config, args) -> None:
-    """Initialize, run, and close a single service."""
-    service: Service | None = None
+def _run_service(service: Service, config, args) -> None:
+    """Log in, generate playlist, and sync a single service."""
     try:
-        service = plugin.create(config)
-
         artists = list(map(lambda a: service.sanitize_id(a), config.service_artists(service.name)))
         vips = list(map(lambda a: service.sanitize_id(a), config.vip_artists(service.name)))
         excluded_albums = list(map(lambda a: service.sanitize_id(a), config.excluded_albums(service.name)))
@@ -35,8 +32,7 @@ def _run_service(plugin, config, args) -> None:
         service.sync(playlist_name, playlist_track_ids)
         logger.info(f"* finished updating {service.name}")
     finally:
-        if service is not None:
-            service.close()
+        service.close()
 
 
 def main():
@@ -60,25 +56,27 @@ def main():
 
     config = Config()
 
-    active_plugins = []
+    services: list[Service] = []
     for plugin in load_plugins():
         plugin_name = plugin.__name__.split(".")[-1]
         if config.is_enabled(plugin_name):
-            active_plugins.append(plugin)
+            services.append(plugin.create(config))
         else:
             logger.warning(f"Service {plugin_name} is disabled in the configuration, skipping.")
 
+    for service in services:
+        service.preflight()
+
     errors: list[tuple[str, Exception]] = []
-    with ThreadPoolExecutor(max_workers=len(active_plugins) or 1) as executor:
-        futures = {executor.submit(_run_service, plugin, config, args): plugin for plugin in active_plugins}
+    with ThreadPoolExecutor(max_workers=len(services) or 1) as executor:
+        futures = {executor.submit(_run_service, service, config, args): service for service in services}
         for future in as_completed(futures):
-            plugin = futures[future]
-            plugin_name = plugin.__name__.split(".")[-1]
+            service = futures[future]
             try:
                 future.result()
             except Exception as exc:
-                logger.exception(f"Service {plugin_name} raised an exception")
-                errors.append((plugin_name, exc))
+                logger.exception(f"Service {service.name} raised an exception")
+                errors.append((service.name, exc))
 
     if errors:
         failed = ", ".join(name for name, _ in errors)

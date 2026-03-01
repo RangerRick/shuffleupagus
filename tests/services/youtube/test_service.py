@@ -350,8 +350,8 @@ def browser_svc(tmp_path, monkeypatch):
     return s, tmp_path
 
 
-def test_browser_auth_valid(browser_svc):
-    """Valid cookies → no re-auth prompt."""
+def test_preflight_browser_auth_valid(browser_svc):
+    """Valid cookies → preflight passes, no re-auth prompt."""
     svc, tmp_path = browser_svc
     auth_file = tmp_path / "browser_auth.json"
     auth_file.write_text("{}")
@@ -359,17 +359,18 @@ def test_browser_auth_valid(browser_svc):
     with (
         patch("shuffleupagus.services.youtube.service.get_filepath", return_value=str(auth_file)),
         patch("shuffleupagus.services.youtube.service.YTMusic") as mock_yt,
+        patch("shuffleupagus.services.youtube.service.ytmusicapi.setup") as mock_setup,
     ):
         mock_client = MagicMock()
         mock_client.get_artist.return_value = {"channelId": "UCtest", "name": "Test"}
         mock_yt.return_value = mock_client
-        svc.login()
+        svc.preflight()
 
-    assert svc.client is mock_client
+    mock_setup.assert_not_called()
 
 
-def test_browser_auth_expired_interactive_reauth(browser_svc):
-    """Expired cookies + interactive TTY → re-auth runs and client is re-created."""
+def test_preflight_browser_auth_expired_interactive_reauth(browser_svc):
+    """Expired cookies + interactive TTY → preflight triggers re-auth."""
     svc, tmp_path = browser_svc
     auth_file = tmp_path / "browser_auth.json"
     auth_file.write_text("{}")
@@ -381,19 +382,16 @@ def test_browser_auth_expired_interactive_reauth(browser_svc):
         patch("shuffleupagus.services.youtube.service.sys") as mock_sys,
     ):
         mock_sys.stdin.isatty.return_value = True
-        mock_client_bad = MagicMock()
-        mock_client_bad.get_artist.side_effect = YTMusicServerError("400")
-        mock_client_good = MagicMock()
-        mock_client_good.get_artist.return_value = {"channelId": "UCtest", "name": "Test"}
-        mock_yt.side_effect = [mock_client_bad, mock_client_good]
+        mock_client = MagicMock()
+        mock_client.get_artist.side_effect = YTMusicServerError("400")
+        mock_yt.return_value = mock_client
 
-        svc.login()
+        svc.preflight()
 
     mock_setup.assert_called_once_with(filepath=str(auth_file))
-    assert svc.client is mock_client_good
 
 
-def test_browser_auth_expired_env_var(browser_svc, monkeypatch):
+def test_preflight_browser_auth_expired_env_var(browser_svc, monkeypatch):
     """Expired cookies + YTMUSIC_HEADERS_RAW → setup(headers_raw=...) called."""
     svc, tmp_path = browser_svc
     auth_file = tmp_path / "browser_auth.json"
@@ -405,19 +403,17 @@ def test_browser_auth_expired_env_var(browser_svc, monkeypatch):
         patch("shuffleupagus.services.youtube.service.YTMusic") as mock_yt,
         patch("shuffleupagus.services.youtube.service.ytmusicapi.setup") as mock_setup,
     ):
-        mock_client_bad = MagicMock()
-        mock_client_bad.get_artist.side_effect = YTMusicServerError("400")
-        mock_client_good = MagicMock()
-        mock_client_good.get_artist.return_value = {"channelId": "UCtest", "name": "Test"}
-        mock_yt.side_effect = [mock_client_bad, mock_client_good]
+        mock_client = MagicMock()
+        mock_client.get_artist.side_effect = YTMusicServerError("400")
+        mock_yt.return_value = mock_client
 
-        svc.login()
+        svc.preflight()
 
     mock_setup.assert_called_once_with(filepath=str(auth_file), headers_raw="fake-raw-headers")
 
 
-def test_browser_auth_expired_no_tty(browser_svc, monkeypatch):
-    """Expired cookies + no TTY + no env var → raises ValueError."""
+def test_preflight_browser_auth_expired_no_tty(browser_svc, monkeypatch):
+    """Expired cookies + no TTY + no env var → preflight raises ValueError."""
     svc, tmp_path = browser_svc
     auth_file = tmp_path / "browser_auth.json"
     auth_file.write_text("{}")
@@ -434,11 +430,11 @@ def test_browser_auth_expired_no_tty(browser_svc, monkeypatch):
         mock_yt.return_value = mock_client
 
         with pytest.raises(ValueError, match="re-auth failed"):
-            svc.login()
+            svc.preflight()
 
 
-def test_browser_auth_missing_file(browser_svc):
-    """No auth file exists → setup prompted before creating client."""
+def test_preflight_browser_auth_missing_file(browser_svc):
+    """No auth file exists → preflight prompts setup."""
     svc, tmp_path = browser_svc
     auth_file = tmp_path / "browser_auth.json"
     # Don't create the file — it shouldn't exist
@@ -456,7 +452,18 @@ def test_browser_auth_missing_file(browser_svc):
         mock_client.get_artist.return_value = {"channelId": "UCtest", "name": "Test"}
         mock_yt.return_value = mock_client
 
-        svc.login()
+        svc.preflight()
 
     mock_setup.assert_called_once_with(filepath=str(auth_file))
-    assert svc.client is mock_client
+
+
+def test_preflight_skipped_for_oauth(browser_svc):
+    """OAuth mode (client-id + client-secret set) → preflight is a no-op."""
+    svc, tmp_path = browser_svc
+    svc.config["client-id"] = "some-id"
+    svc.config["client-secret"] = "some-secret"
+
+    with patch("shuffleupagus.services.youtube.service.YTMusic") as mock_yt:
+        svc.preflight()
+
+    mock_yt.assert_not_called()

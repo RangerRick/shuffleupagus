@@ -131,6 +131,13 @@ class Service:
     def sanitize_id(self, id: str) -> str:
         return id
 
+    def preflight(self) -> None:
+        """Pre-check run sequentially before threaded processing starts.
+
+        Override to validate credentials, prompt for re-auth, etc.
+        Raising here aborts the entire run before any service threads start.
+        """
+
     def login(self) -> None:
         raise NotImplementedError
 
