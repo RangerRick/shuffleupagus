@@ -16,9 +16,9 @@ from shuffleupagus.services.youtube.service import YoutubeService
 
 @pytest.fixture
 def svc(tmp_path, monkeypatch):
-    monkeypatch.setattr(Cache, "_filename", lambda self: str(tmp_path / f"{self.name}.joblib.gz"))
+    monkeypatch.setattr(Cache, "_db_path", lambda self: str(tmp_path / f"{self.name}.db"))
     s = YoutubeService.__new__(YoutubeService)
-    s.cache = Cache("youtube", autosave=False)
+    s.cache = Cache("youtube")
     s.config = {}
     s.client = MagicMock()
     s.tag = "[youtube] "
@@ -216,7 +216,9 @@ def test_get_artist_albums_fingerprint_match_uses_stale(svc):
     from shuffleupagus.services.youtube.model import YoutubeArtist
 
     stale = [{"browseId": "MPL1", "title": "Album", "year": "2020"}]
-    svc.cache._cache["artist:UCabc:albums"] = [stale, time.time() - 3600, 60.0]
+    svc.cache.write("artist:UCabc:albums", stale, ttl=60.0)
+    svc.cache._conn.execute("UPDATE cache SET stored_at = ? WHERE key = ?", (time.time() - 3600, "artist:UCabc:albums"))
+    svc.cache._conn.commit()
 
     artist = YoutubeArtist("UCabc", "Band")
     artist.inlineAlbums = [{"browseId": "MPL1", "title": "Album", "year": "2020"}]
@@ -233,7 +235,9 @@ def test_get_artist_albums_fingerprint_mismatch_refetches(svc):
     from shuffleupagus.services.youtube.model import YoutubeArtist
 
     stale = [{"browseId": "MPL1", "title": "Old Album", "year": "2020"}]
-    svc.cache._cache["artist:UCabc:albums"] = [stale, time.time() - 3600, 60.0]
+    svc.cache.write("artist:UCabc:albums", stale, ttl=60.0)
+    svc.cache._conn.execute("UPDATE cache SET stored_at = ? WHERE key = ?", (time.time() - 3600, "artist:UCabc:albums"))
+    svc.cache._conn.commit()
 
     artist = YoutubeArtist("UCabc", "Band")
     # inlineAlbums[0] has a different browseId — new release detected
@@ -342,9 +346,9 @@ def test_sync_deletes_and_inserts(svc):
 @pytest.fixture
 def browser_svc(tmp_path, monkeypatch):
     """YoutubeService wired for browser-cookie auth (no client_id/secret)."""
-    monkeypatch.setattr(Cache, "_filename", lambda self: str(tmp_path / f"{self.name}.joblib.gz"))
+    monkeypatch.setattr(Cache, "_db_path", lambda self: str(tmp_path / f"{self.name}.db"))
     s = YoutubeService.__new__(YoutubeService)
-    s.cache = Cache("youtube", autosave=False)
+    s.cache = Cache("youtube")
     s.config = {"auth-file": str(tmp_path / "browser_auth.json")}
     s.tag = "[youtube] "
     return s, tmp_path

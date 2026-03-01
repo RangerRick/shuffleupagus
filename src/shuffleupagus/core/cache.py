@@ -1,156 +1,102 @@
+import json
 import os
-import random
+import sqlite3
 import threading
 import time
 
-import joblib
-
 CACHE_DEFAULT_CUTOFF = 60 * 60 * 24 * 7 * 1.0  # 1 week
-CACHE_AUTOSAVE_LIMIT = 50
 
 
 class Cache:
     name: str
     cutoff: float
-    autosave: bool
 
-    def __init__(self, name: str, cutoff: float = CACHE_DEFAULT_CUTOFF, autosave: bool = True):
+    def __init__(self, name: str, cutoff: float = CACHE_DEFAULT_CUTOFF, **_kwargs):
         self.name = name
         self.cutoff = cutoff
-        self.autosave = autosave
-        self._cache: dict = {}
         self._lock = threading.Lock()
-        self._saving = False
-        self._save_pending = False
-        self._update_count = 0
         print(f"* loading '{name}' cache", flush=True)
-        self._load()
+        path = self._db_path()
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        self._conn = sqlite3.connect(path, check_same_thread=False)
+        self._conn.execute("PRAGMA journal_mode=WAL")
+        self._conn.execute("PRAGMA synchronous=NORMAL")
+        self._conn.execute(
+            """CREATE TABLE IF NOT EXISTS cache (
+                key       TEXT PRIMARY KEY,
+                value     TEXT NOT NULL,
+                stored_at REAL NOT NULL,
+                ttl       REAL NOT NULL
+            )"""
+        )
+        self._conn.commit()
 
-    def _filename(self):
-        return os.path.expanduser(f"~/.cache/shuffleupagus/{self.name}.joblib.gz")
-
-    def _load(self):
-        path = self._filename()
-        if os.path.exists(path):
-            try:
-                self._cache = joblib.load(path)
-            except Exception as exc:
-                print(
-                    f"* cache file corrupt for '{self.name}', starting fresh ({type(exc).__name__}: {exc})",
-                    flush=True,
-                )
-                self._cache = {}
-
-    def _clean_locked(self):
-        """Evict expired entries. Caller must hold self._lock."""
-        count = 0
-        now = time.time()
-        for key in list(self._cache.keys()):
-            entry = self._cache[key]
-            stored_at = entry[1]
-            key_ttl = entry[2] if len(entry) > 2 else self.cutoff
-            jitter = key_ttl * random.randrange(80, 120) / 100.0
-            if now - stored_at > jitter:
-                del self._cache[key]
-                count += 1
-        return count
-
-    def _clean(self):
-        with self._lock:
-            return self._clean_locked()
+    def _db_path(self):
+        return os.path.expanduser(f"~/.cache/shuffleupagus/{self.name}.db")
 
     def read(self, key: str):
         """Return the cached value if present and not expired, else None."""
         with self._lock:
-            if key in self._cache:
-                entry = self._cache[key]
-                stored_at = entry[1]
-                key_ttl = entry[2] if len(entry) > 2 else self.cutoff
-                if time.time() - stored_at <= key_ttl:
-                    return entry[0]
-        return None
+            row = self._conn.execute(
+                "SELECT value, stored_at, ttl FROM cache WHERE key = ?",
+                (key,),
+            ).fetchone()
+        if row is None:
+            return None
+        value, stored_at, ttl = row
+        if time.time() - stored_at > ttl:
+            return None
+        return json.loads(value)
 
     def read_stale(self, key: str):
-        """Return the cached value regardless of TTL, or None if not present."""
+        """Return the cached value regardless of TTL, or None if absent."""
         with self._lock:
-            if key in self._cache:
-                return self._cache[key][0]
-        return None
-
-    def touch(self, key: str) -> bool:
-        """Reset the timestamp of a cache entry to now. Returns True if found."""
-        should_save = False
-        with self._lock:
-            if key in self._cache:
-                self._cache[key][1] = time.time()
-                if self.autosave:
-                    should_save = self._check_autosave_threshold()
-                found = True
-            else:
-                found = False
-        if should_save:
-            self.save()
-        return found
-
-    def delete(self, key: str) -> bool:
-        """Remove a cache entry. Returns True if found."""
-        should_save = False
-        with self._lock:
-            if key in self._cache:
-                del self._cache[key]
-                if self.autosave:
-                    should_save = self._check_autosave_threshold()
-                found = True
-            else:
-                found = False
-        if should_save:
-            self.save()
-        return found
+            row = self._conn.execute("SELECT value FROM cache WHERE key = ?", (key,)).fetchone()
+        if row is None:
+            return None
+        return json.loads(row[0])
 
     def write(self, key: str, obj, ttl: float | None = None):
         effective_ttl = ttl if ttl is not None else self.cutoff
-        should_save = False
         with self._lock:
-            self._cache[key] = [obj, time.time(), effective_ttl]
-            if self.autosave:
-                should_save = self._check_autosave_threshold()
-        if should_save:
-            self.save()
+            self._conn.execute(
+                "INSERT OR REPLACE INTO cache (key, value, stored_at, ttl) VALUES (?, ?, ?, ?)",
+                (key, json.dumps(obj), time.time(), effective_ttl),
+            )
+            self._conn.commit()
         return obj
 
-    def _check_autosave_threshold(self) -> bool:
-        """Check and update the autosave counter. Caller must hold self._lock.
+    def touch(self, key: str) -> bool:
+        """Reset the timestamp of a cache entry to now."""
+        with self._lock:
+            cursor = self._conn.execute(
+                "UPDATE cache SET stored_at = ? WHERE key = ?",
+                (time.time(), key),
+            )
+            self._conn.commit()
+        return cursor.rowcount > 0
 
-        Returns True if save() should be called after releasing the lock.
-        """
-        self._update_count += 1
-        if self._update_count > CACHE_AUTOSAVE_LIMIT:
-            self._update_count = 0
-            return True
-        return False
+    def delete(self, key: str) -> bool:
+        """Remove a cache entry."""
+        with self._lock:
+            cursor = self._conn.execute("DELETE FROM cache WHERE key = ?", (key,))
+            self._conn.commit()
+        return cursor.rowcount > 0
+
+    def _clean(self):
+        """Evict expired entries. Returns count of evicted rows."""
+        with self._lock:
+            cursor = self._conn.execute(
+                "DELETE FROM cache WHERE (? - stored_at) > ttl",
+                (time.time(),),
+            )
+            self._conn.commit()
+        return cursor.rowcount
 
     def save(self):
-        with self._lock:
-            if self._saving:
-                self._save_pending = True
-                return
-            self._saving = True
+        """Run eviction. Data is already durable on disk."""
+        self._clean()
 
-        while True:
-            with self._lock:
-                self._save_pending = False
-                self._clean_locked()
-                snapshot = {k: v.copy() for k, v in self._cache.items()}
-
-            try:
-                os.makedirs(os.path.dirname(self._filename()), exist_ok=True)
-                joblib.dump(snapshot, self._filename())
-            except BaseException:
-                with self._lock:
-                    self._saving = False
-                raise
-
-            with self._lock:
-                if not self._save_pending:
-                    self._saving = False
-                    return
+    def close(self):
+        """Close the database connection."""
+        self._conn.close()

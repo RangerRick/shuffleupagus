@@ -1,4 +1,5 @@
 """Tests for AppleMusicService with all network/applescript calls mocked."""
+
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -9,6 +10,7 @@ from shuffleupagus.services.appleMusic.service import AppleMusicService
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 def _artist_response(id="a1", name="Artist"):
     return {"data": [{"id": id, "attributes": {"name": name}}]}
@@ -37,13 +39,12 @@ def _track_response(id="t1", name="Track", duration_ms=180_000, isrc="USRC000000
 # Fixture
 # ---------------------------------------------------------------------------
 
+
 @pytest.fixture
 def svc(tmp_path, monkeypatch):
-    monkeypatch.setattr(
-        Cache, "_filename", lambda self: str(tmp_path / f"{self.name}.joblib.gz")
-    )
+    monkeypatch.setattr(Cache, "_db_path", lambda self: str(tmp_path / f"{self.name}.db"))
     s = AppleMusicService.__new__(AppleMusicService)
-    s.cache = Cache("appleMusic", autosave=False)
+    s.cache = Cache("appleMusic")
     s.config = {"media-user-token": "tok"}
     s.client = MagicMock()
     s.client.proxies = {}
@@ -55,6 +56,7 @@ def svc(tmp_path, monkeypatch):
 # ---------------------------------------------------------------------------
 # get_artist
 # ---------------------------------------------------------------------------
+
 
 def test_get_artist_cache_miss(svc):
     svc.client.artist.return_value = _artist_response("a1", "My Artist")
@@ -73,6 +75,7 @@ def test_get_artist_cache_hit(svc):
 
 def test_get_artist_from_artist_object(svc):
     from shuffleupagus.core.model import Artist
+
     obj = Artist("a1", "Existing")
     svc.cache.write("artist:a1", _artist_response("a1", "Existing"))
     artist = svc.get_artist(obj)
@@ -95,6 +98,7 @@ def test_get_artist_empty_data_returns_none(svc):
 # ---------------------------------------------------------------------------
 # get_album_by_id
 # ---------------------------------------------------------------------------
+
 
 def test_get_album_by_id_cache_miss(svc):
     svc.client.album.return_value = _album_response("alb1", "Test Album")
@@ -120,8 +124,10 @@ def test_get_album_by_id_error_returns_none(svc):
 # get_artist_albums
 # ---------------------------------------------------------------------------
 
+
 def test_get_artist_albums(svc):
     from shuffleupagus.core.model import Artist
+
     svc.client.artist_relationship.return_value = {
         "data": [
             {"id": "alb1", "attributes": {"name": "Album One", "releaseDate": "2021-01-01"}},
@@ -136,9 +142,10 @@ def test_get_artist_albums(svc):
 
 def test_get_artist_albums_cache_hit(svc):
     from shuffleupagus.core.model import Artist
-    svc.cache.write("artist:a1:albums", {
-        "data": [{"id": "alb1", "attributes": {"name": "Cached", "releaseDate": "2020-01-01"}}]
-    })
+
+    svc.cache.write(
+        "artist:a1:albums", {"data": [{"id": "alb1", "attributes": {"name": "Cached", "releaseDate": "2020-01-01"}}]}
+    )
     albums = svc.get_artist_albums(Artist("a1", "A"))
     assert len(albums) == 1
     svc.client.artist_relationship.assert_not_called()
@@ -146,6 +153,7 @@ def test_get_artist_albums_cache_hit(svc):
 
 def test_get_artist_albums_empty(svc):
     from shuffleupagus.core.model import Artist
+
     svc.client.artist_relationship.return_value = {"data": []}
     albums = svc.get_artist_albums(Artist("a1", "A"))
     assert albums == []
@@ -153,6 +161,7 @@ def test_get_artist_albums_empty(svc):
 
 def test_get_artist_albums_error_returns_empty(svc):
     from shuffleupagus.core.model import Artist
+
     svc.client.artist_relationship.side_effect = Exception("error")
     albums = svc.get_artist_albums(Artist("a1", "A"))
     assert albums == []
@@ -162,8 +171,10 @@ def test_get_artist_albums_error_returns_empty(svc):
 # get_album_tracks
 # ---------------------------------------------------------------------------
 
+
 def test_get_album_tracks(svc):
     from shuffleupagus.core.model import Album
+
     svc.client.album_relationship.return_value = {
         "data": [
             {"id": "t1", "attributes": {"name": "Track 1", "durationInMillis": 200_000, "isrc": "US001"}},
@@ -180,9 +191,11 @@ def test_get_album_tracks(svc):
 
 def test_get_album_tracks_cache_hit(svc):
     from shuffleupagus.core.model import Album
-    svc.cache.write("album:alb1:tracks", {
-        "data": [{"id": "t1", "attributes": {"name": "T", "durationInMillis": 100_000, "isrc": "US001"}}]
-    })
+
+    svc.cache.write(
+        "album:alb1:tracks",
+        {"data": [{"id": "t1", "attributes": {"name": "T", "durationInMillis": 100_000, "isrc": "US001"}}]},
+    )
     tracks = svc.get_album_tracks(Album("alb1", "A"))
     assert len(tracks) == 1
     svc.client.album_relationship.assert_not_called()
@@ -190,6 +203,7 @@ def test_get_album_tracks_cache_hit(svc):
 
 def test_get_album_tracks_empty(svc):
     from shuffleupagus.core.model import Album
+
     svc.client.album_relationship.return_value = {"data": []}
     tracks = svc.get_album_tracks(Album("alb1", "A"))
     assert tracks == []
@@ -197,6 +211,7 @@ def test_get_album_tracks_empty(svc):
 
 def test_get_album_tracks_with_artist(svc):
     from shuffleupagus.core.model import Album, Artist
+
     svc.client.album_relationship.return_value = {
         "data": [{"id": "t1", "attributes": {"name": "T", "durationInMillis": 100_000, "isrc": "US001"}}]
     }
@@ -210,11 +225,11 @@ def test_get_album_tracks_with_artist(svc):
 # get_artist_top_tracks
 # ---------------------------------------------------------------------------
 
+
 def test_get_artist_top_tracks(svc):
     from shuffleupagus.core.model import Artist
-    svc.client.artist_relationship_view.return_value = {
-        "data": [{"id": "t1"}, {"id": "t2"}]
-    }
+
+    svc.client.artist_relationship_view.return_value = {"data": [{"id": "t1"}, {"id": "t2"}]}
     svc.client.song.side_effect = [_track_response("t1", "Song 1"), _track_response("t2", "Song 2")]
     tracks = svc.get_artist_top_tracks(Artist("a1", "A"))
     assert len(tracks) == 2
@@ -223,6 +238,7 @@ def test_get_artist_top_tracks(svc):
 
 def test_get_artist_top_tracks_cache_hit(svc):
     from shuffleupagus.core.model import Artist
+
     svc.cache.write("top-tracks:a1", {"data": [{"id": "t1"}]})
     svc.client.song.return_value = _track_response("t1", "Cached Song")
     tracks = svc.get_artist_top_tracks(Artist("a1", "A"))
@@ -232,6 +248,7 @@ def test_get_artist_top_tracks_cache_hit(svc):
 
 def test_get_artist_top_tracks_empty(svc):
     from shuffleupagus.core.model import Artist
+
     svc.client.artist_relationship_view.return_value = {"data": []}
     tracks = svc.get_artist_top_tracks(Artist("a1", "A"))
     assert tracks == []
@@ -239,6 +256,7 @@ def test_get_artist_top_tracks_empty(svc):
 
 def test_get_artist_top_tracks_error_returns_empty(svc):
     from shuffleupagus.core.model import Artist
+
     svc.client.artist_relationship_view.side_effect = Exception("error")
     tracks = svc.get_artist_top_tracks(Artist("a1", "A"))
     assert tracks == []
@@ -247,6 +265,7 @@ def test_get_artist_top_tracks_error_returns_empty(svc):
 # ---------------------------------------------------------------------------
 # get_playlist_id_for_name
 # ---------------------------------------------------------------------------
+
 
 def _mock_session_get(svc, data_list=None, status_code=200, error_json=None):
     resp = MagicMock()
@@ -262,10 +281,13 @@ def _mock_session_get(svc, data_list=None, status_code=200, error_json=None):
 
 
 def test_get_playlist_id_for_name_found(svc):
-    _mock_session_get(svc, [
-        {"id": "pl1", "attributes": {"name": "My Playlist"}},
-        {"id": "pl2", "attributes": {"name": "Other"}},
-    ])
+    _mock_session_get(
+        svc,
+        [
+            {"id": "pl1", "attributes": {"name": "My Playlist"}},
+            {"id": "pl2", "attributes": {"name": "Other"}},
+        ],
+    )
     assert svc.get_playlist_id_for_name("My Playlist") == "pl1"
 
 
@@ -278,6 +300,7 @@ def test_get_playlist_id_for_name_not_found(svc):
 # ---------------------------------------------------------------------------
 # sync
 # ---------------------------------------------------------------------------
+
 
 def test_sync(svc):
     svc.get_playlist_id_for_name = MagicMock(return_value="pl1")
