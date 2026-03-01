@@ -63,6 +63,7 @@ class YoutubeService(Service):
                 f"{self.tag}* browser cookie file not found ({browser_file.name}), starting setup",
             )
             self._setup_browser_auth_with_retry(browser_file)
+            logger.info(f"{self.tag}* browser cookies validated successfully")
             return
 
         if not self._try_validate_browser_file(browser_file):
@@ -70,6 +71,8 @@ class YoutubeService(Service):
                 f"{self.tag}* browser cookies expired or invalid, starting re-auth",
             )
             self._setup_browser_auth_with_retry(browser_file)
+
+        logger.info(f"{self.tag}* browser cookies validated successfully")
 
     def _try_validate_browser_file(self, browser_file: Path) -> bool:
         """Try to load and validate browser cookies. Returns False on any failure."""
@@ -258,7 +261,7 @@ class YoutubeService(Service):
 
         artist_url = "https://www.youtube.com/" + artist if artist.startswith("@") else artist
 
-        logger.debug(f"{self.tag}* fetching channel ID for artist handle: {artist} (URL: {artist_url})")
+        logger.info(f"{self.tag}* resolving artist handle: {artist}")
         response = requests.get(artist_url, timeout=30)
         if response.status_code < 200 or response.status_code >= 300:
             raise ValueError(
@@ -320,8 +323,8 @@ class YoutubeService(Service):
                     if "400" in str(e):
                         logger.warning(
                             f"{self.tag}* {original} (channel: {artist_id}): YouTube Music API returned "
-                            f"HTTP 400 — this artist is not cached and OAuth cannot browse YT Music. "
-                            f"Re-run once with browser-cookie auth to warm the cache.",
+                            f"HTTP 400 — this artist may not have a YouTube Music page, or your "
+                            f"browser cookies may lack access to browse artist pages.",
                         )
                     else:
                         logger.warning(

@@ -1,4 +1,5 @@
 import argparse
+import os
 import signal
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
@@ -89,13 +90,10 @@ def main():
         service.preflight()
 
     executor = ThreadPoolExecutor(max_workers=16)
-    interrupted = False
 
     def _handle_sigint(_signum, _frame):
-        nonlocal interrupted
-        interrupted = True
-        logger.warning("* interrupted, shutting down...")
-        executor.shutdown(wait=False, cancel_futures=True)
+        logger.warning("* interrupted, exiting")
+        os._exit(130)
 
     prev_handler = signal.signal(signal.SIGINT, _handle_sigint)
 
@@ -117,7 +115,7 @@ def main():
     finally:
         for service in services:
             service.close()
-        executor.shutdown(wait=not interrupted)
+        executor.shutdown(wait=True)
         signal.signal(signal.SIGINT, prev_handler)
 
     if errors:
