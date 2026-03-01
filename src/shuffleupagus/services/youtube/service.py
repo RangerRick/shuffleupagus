@@ -130,14 +130,15 @@ class YoutubeService(Service):
     _BROWSER_AUTH_INSTRUCTIONS = (
         "Browser cookie auth is required to browse YouTube Music artist pages.\n"
         "\n"
-        "To get your request headers:\n"
+        "To get your raw request headers:\n"
         "  1. Open https://music.youtube.com in Firefox or Chrome\n"
         "  2. Make sure you are logged in\n"
         "  3. Open DevTools (F12) → Network tab\n"
         "  4. Click on any request to music.youtube.com\n"
-        "  5. Copy the full 'Request Headers' section\n"
+        "  5. Right-click the request → Copy → Copy Request Headers (raw)\n"
+        "     The raw headers look like 'key: value' pairs, one per line.\n"
         "\n"
-        "Paste the headers below, then press Enter followed by Ctrl-D (EOF).\n"
+        "Paste the raw headers below, then press Enter followed by Ctrl-D (EOF).\n"
         "Alternatively, set the YTMUSIC_HEADERS_RAW environment variable.\n"
     )
 
