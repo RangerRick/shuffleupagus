@@ -89,8 +89,11 @@ def main():
         service.preflight()
 
     executor = ThreadPoolExecutor(max_workers=16)
+    interrupted = False
 
     def _handle_sigint(_signum, _frame):
+        nonlocal interrupted
+        interrupted = True
         logger.warning("* interrupted, shutting down...")
         executor.shutdown(wait=False, cancel_futures=True)
 
@@ -114,7 +117,7 @@ def main():
     finally:
         for service in services:
             service.close()
-        executor.shutdown(wait=True)
+        executor.shutdown(wait=not interrupted)
         signal.signal(signal.SIGINT, prev_handler)
 
     if errors:
