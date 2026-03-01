@@ -326,11 +326,11 @@ class AppleMusicService(Service):
                     json=payload,
                 )
                 if 200 <= r.status_code < 300:
-                    logger.debug(f"{self.tag}  * added batch of {len(batch)} tracks ({r.status_code})")
+                    logger.debug(f"{self.tag}  * added batch of {len(batch)} tracks")
                     break
 
-                logger.warning(f"{self.tag}  ! {r.status_code} {r.reason}")
+                logger.warning(f"{self.tag}  ! request failed ({r.status_code} {r.reason})")
                 if len(r.text.strip()) > 0:
                     logger.warning(f"{self.tag}  ! {r.text}")
                 if retries == 0:
-                    raise RuntimeError(f"Failed to add tracks to playlist after 3 retries: {r.status_code}")
+                    raise RuntimeError(f"Failed to add tracks to playlist after 3 retries ({r.status_code} {r.reason})")
