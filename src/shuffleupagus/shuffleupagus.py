@@ -151,4 +151,5 @@ def main():
 
     if errors:
         failed = ", ".join(name for name, _ in errors)
-        raise RuntimeError(f"The following services failed: {failed}")
+        logger.error(f"The following services failed: {failed}")
+        raise SystemExit(1)
