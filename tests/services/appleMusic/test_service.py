@@ -493,3 +493,127 @@ def test_get_playlist_tracks_empty_404(svc):
 
     result = svc._AppleMusicService__get_playlist_tracks("pl1")
     assert result == []
+
+
+def test_get_playlist_tracks_404_unknown_error(svc):
+    """A 404 without error code 40403 raises RuntimeError."""
+    svc.client._auth_headers.return_value = {}
+
+    resp = MagicMock()
+    resp.status_code = 404
+    resp.json.return_value = {"errors": [{"code": "40404", "title": "Not Found"}]}
+    svc.client._session.get.return_value = resp
+
+    with pytest.raises(RuntimeError, match="Failed to read playlist tracks: 404"):
+        svc._AppleMusicService__get_playlist_tracks("pl1")
+
+
+def test_get_playlist_tracks_server_error(svc):
+    """A non-2xx, non-404 response raises RuntimeError."""
+    svc.client._auth_headers.return_value = {}
+
+    resp = MagicMock()
+    resp.status_code = 500
+    svc.client._session.get.return_value = resp
+
+    with pytest.raises(RuntimeError, match="Failed to read playlist tracks: 500"):
+        svc._AppleMusicService__get_playlist_tracks("pl1")
+
+
+# ---------------------------------------------------------------------------
+# __post_batch
+# ---------------------------------------------------------------------------
+
+
+def test_post_batch_retries_then_raises(svc):
+    """__post_batch raises after 3 failed attempts."""
+    svc.client._auth_headers.return_value = {}
+
+    resp = MagicMock()
+    resp.status_code = 500
+    resp.reason = "Internal Server Error"
+    resp.text = "error body"
+    svc.client._session.post.return_value = resp
+
+    with pytest.raises(RuntimeError, match="Failed to add tracks after 3 retries"):
+        svc._AppleMusicService__post_batch("pl1", ["t1"])
+
+    assert svc.client._session.post.call_count == 3
+
+
+# ---------------------------------------------------------------------------
+# __clear_playlist
+# ---------------------------------------------------------------------------
+
+
+def test_clear_playlist_polls_until_zero(svc):
+    """__clear_playlist polls local Music.app until count reaches 0."""
+    counts = [100, 50, 0]
+    scripts = []
+
+    def make_script(*_args, **_kwargs):
+        mock = MagicMock()
+        scripts.append(mock)
+        if len(scripts) == 1:
+            # Delete script
+            mock.run.return_value = None
+        else:
+            # Count script — return successive values
+            it = iter(counts)
+            mock.run.side_effect = lambda: next(it)
+        return mock
+
+    with (
+        patch(
+            "shuffleupagus.services.appleMusic.service.applescript.AppleScript",
+            side_effect=make_script,
+        ),
+        patch("shuffleupagus.services.appleMusic.service.time.sleep"),
+    ):
+        svc._AppleMusicService__clear_playlist("Test")
+
+    # Count script polled 3 times: 100, 50, 0
+    assert scripts[1].run.call_count == 3
+
+
+# ---------------------------------------------------------------------------
+# __add_tracks re-queue
+# ---------------------------------------------------------------------------
+
+
+def test_add_tracks_requeues_missing_after_all_retries(svc):
+    """When verification fails all 3 attempts, missing tracks are re-queued."""
+    svc.client._auth_headers.return_value = {}
+
+    post_resp = MagicMock()
+    post_resp.status_code = 204
+    svc.client._session.post.return_value = post_resp
+
+    # Cloud count never matches: always returns 2 instead of 3
+    # Cloud track list always returns [t1, t2] (t3 missing)
+    # After re-queue, cloud count returns 3 (t3 re-added successfully)
+    svc._AppleMusicService__get_playlist_length = MagicMock(side_effect=[2, 2, 2, 2, 3])
+    svc._AppleMusicService__get_playlist_tracks = MagicMock(
+        side_effect=[
+            ["t1", "t2"],  # verify attempt 1
+            ["t1", "t2"],  # verify attempt 2
+            ["t1", "t2"],  # verify attempt 3
+            ["t1", "t2"],  # final fallback check
+            ["t1", "t2", "t3"],  # re-queued batch verify
+        ]
+    )
+
+    with patch("shuffleupagus.services.appleMusic.service.time.sleep"):
+        svc._AppleMusicService__add_tracks("pl1", ["t1", "t2", "t3"])
+
+    # 1 initial batch + 3 retries of t3 + 1 final fallback retry + 1 re-queued batch
+    assert svc.client._session.post.call_count >= 5
+
+
+def test_sync_empty_tracks_skips(svc):
+    """sync() with empty track list logs warning and returns."""
+    svc.sync("Playlist", [])
+    svc.sync("Playlist", None)
+    # No API calls should have been made
+    svc.client._session.post.assert_not_called()
+    svc.client._session.get.assert_not_called()
