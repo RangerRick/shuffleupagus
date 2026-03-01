@@ -119,13 +119,24 @@ class YoutubeService(Service):
     def _validate_browser_auth(self, client: YTMusic) -> bool:
         """Check whether browser cookies are still valid by hitting the browse endpoint."""
         try:
-            # get_account_info can return 200 with degraded data on expired
-            # cookies; get_artist uses the browse endpoint which returns 400
-            # when auth is actually invalid — a much more reliable signal.
-            client.get_artist("UCMDQxm7cUx3yXkFeHa5zrBA")  # Taylor Swift
-        except YTMusicServerError, YTMusicUserError, KeyError, Exception:
+            response = client._send_request("browse", {"browseId": "UCMDQxm7cUx3yXkFeHa5zrBA"})
+        except YTMusicServerError as exc:
+            logger.warning(f"{self.tag}* browser auth validation failed (server error): {exc}")
             return False
-        return True
+        except requests.RequestException as exc:
+            logger.warning(f"{self.tag}* browser auth validation failed (network error): {exc}")
+            return False
+        # A successful authenticated response includes tracking params with
+        # logged_in=1. The response body structure varies by account type
+        # (brand/creator accounts get a different format), so we only check
+        # that the server accepted our auth — not that parsing succeeds.
+        tracking = response.get("responseContext", {}).get("serviceTrackingParams", [])
+        for service in tracking:
+            for param in service.get("params", []):
+                if param.get("key") == "logged_in" and param.get("value") == "1":
+                    return True
+        logger.warning(f"{self.tag}* browser auth validation failed: not logged in")
+        return False
 
     _BROWSER_AUTH_INSTRUCTIONS = (
         "Browser cookie auth is required to browse YouTube Music artist pages.\n"
