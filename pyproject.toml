@@ -106,3 +106,9 @@ error-on-warning = true
 addopts = "--cov=src --cov-report=term-missing"
 testpaths = ["tests"]
 pythonpath = ["src"]
+
+[tool.coverage.run]
+omit = ["src/shuffleupagus/shuffleupagus.py"]
+
+[tool.coverage.report]
+fail_under = 80

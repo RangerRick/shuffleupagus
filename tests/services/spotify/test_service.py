@@ -1,12 +1,18 @@
 """Tests for SpotifyService with all network calls mocked."""
 
 import threading
+import time
 from unittest.mock import MagicMock
 
 import pytest
+import spotipy
 
 from shuffleupagus.core.cache import Cache
-from shuffleupagus.services.spotify.service import SpotifyService
+from shuffleupagus.core.model import Album, Artist
+from shuffleupagus.services.spotify.service import (
+    SpotifyService,
+    _format_rate_limit,
+)
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -75,8 +81,6 @@ def test_get_artist_sanitizes_url(svc):
 
 
 def test_get_artist_from_artist_object(svc):
-    from shuffleupagus.core.model import Artist
-
     obj = Artist("a1", "Existing")
     svc.cache.write("artist:a1", _artist_payload("a1", "Existing"))
     artist = svc.get_artist(obj)
@@ -89,8 +93,6 @@ def test_get_artist_from_artist_object(svc):
 
 
 def test_get_artist_albums(svc):
-    from shuffleupagus.core.model import Artist
-
     svc.spotify.artist_albums.return_value = {
         "items": [_album_payload("alb1", "Album One"), _album_payload("alb2", "Album Two")]
     }
@@ -101,8 +103,6 @@ def test_get_artist_albums(svc):
 
 
 def test_get_artist_albums_cache_hit(svc):
-    from shuffleupagus.core.model import Artist
-
     svc.cache.write("artist:a1:albums", [_album_payload("alb1", "Cached Album")])
     albums = svc.get_artist_albums(Artist("a1", "A"))
     assert len(albums) == 1
@@ -110,8 +110,6 @@ def test_get_artist_albums_cache_hit(svc):
 
 
 def test_get_artist_albums_empty(svc):
-    from shuffleupagus.core.model import Artist
-
     svc.spotify.artist_albums.return_value = {"items": []}
     albums = svc.get_artist_albums(Artist("a1", "A"))
     assert albums == []
@@ -119,10 +117,6 @@ def test_get_artist_albums_empty(svc):
 
 def test_get_artist_albums_fingerprint_match_uses_stale(svc):
     """Stale cached albums + matching fingerprint → skip full refetch."""
-    import time
-
-    from shuffleupagus.core.model import Artist
-
     stale_albums = [_album_payload("alb1", "Old Album")]
     # Inject expired albums entry and its fingerprint
     svc.cache.write("artist:a1:albums", stale_albums, ttl=60.0)
@@ -143,10 +137,6 @@ def test_get_artist_albums_fingerprint_match_uses_stale(svc):
 
 def test_get_artist_albums_fingerprint_mismatch_refetches(svc):
     """Stale cached albums + fingerprint mismatch → full refetch."""
-    import time
-
-    from shuffleupagus.core.model import Artist
-
     stale_albums = [_album_payload("alb1", "Old Album")]
     svc.cache.write("artist:a1:albums", stale_albums, ttl=60.0)
     svc.cache._conn.execute("UPDATE cache SET stored_at = ? WHERE key = ?", (time.time() - 3600, "artist:a1:albums"))
@@ -164,8 +154,6 @@ def test_get_artist_albums_fingerprint_mismatch_refetches(svc):
 
 def test_get_artist_albums_stores_fingerprint(svc):
     """After a full fetch, the fingerprint is stored in the cache."""
-    from shuffleupagus.core.model import Artist
-
     svc.spotify.artist_albums.return_value = {"items": [_album_payload("alb1", "Album")]}
     svc.get_artist_albums(Artist("a1", "A"))
 
@@ -178,7 +166,6 @@ def test_get_artist_albums_stores_fingerprint(svc):
 
 
 def test_get_album_tracks(svc):
-    from shuffleupagus.core.model import Album
 
     svc.spotify.album_tracks.return_value = {"items": [_track_payload()]}
     svc.spotify.artist.return_value = _artist_payload()
@@ -190,7 +177,6 @@ def test_get_album_tracks(svc):
 
 
 def test_get_album_tracks_no_isrc(svc):
-    from shuffleupagus.core.model import Album
 
     payload = _track_payload()
     del payload["external_ids"]
@@ -206,8 +192,6 @@ def test_get_album_tracks_no_isrc(svc):
 
 
 def test_get_artist_top_tracks(svc):
-    from shuffleupagus.core.model import Artist
-
     track = _track_payload()
     track["album"] = {"id": "alb1"}
     svc.spotify.artist_top_tracks.return_value = {"tracks": [track]}
@@ -220,8 +204,6 @@ def test_get_artist_top_tracks(svc):
 
 
 def test_get_artist_top_tracks_empty(svc):
-    from shuffleupagus.core.model import Artist
-
     svc.spotify.artist_top_tracks.return_value = {"tracks": []}
     tracks = svc.get_artist_top_tracks(Artist("a1", "A"))
     assert tracks == []
@@ -257,4 +239,400 @@ def test_sync_single_batch(svc):
     svc.spotify.current_user_playlists.return_value = {"items": [{"id": "pl1", "name": "P"}]}
     svc.sync("P", ["t1", "t2"])
     svc.spotify.playlist_replace_items.assert_called_once()
+    svc.spotify.playlist_add_items.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# _format_rate_limit
+# ---------------------------------------------------------------------------
+
+
+def test_format_rate_limit_with_retry_after():
+    exc = Exception("rate limited")
+    exc.headers = {"Retry-After": "3661"}
+    msg, epoch = _format_rate_limit(exc)
+    assert "1h 1m from now" in msg
+    assert epoch > 0
+
+
+def test_format_rate_limit_without_retry_after():
+    exc = Exception("rate limited")
+    exc.headers = {}
+    msg, epoch = _format_rate_limit(exc)
+    assert "no Retry-After header" in msg
+    assert epoch == 0
+
+
+def test_format_rate_limit_no_headers_attr():
+    exc = Exception("rate limited")
+    msg, epoch = _format_rate_limit(exc)
+    assert "no Retry-After header" in msg
+    assert epoch == 0
+
+
+# ---------------------------------------------------------------------------
+# _require_config
+# ---------------------------------------------------------------------------
+
+
+def test_require_config_missing_key(svc):
+    with pytest.raises(ValueError, match="Missing required config key"):
+        svc._require_config("client-id")
+
+
+def test_require_config_present(svc):
+    svc.config = {"client-id": "abc123"}
+    assert svc._require_config("client-id") == "abc123"
+
+
+# ---------------------------------------------------------------------------
+# login
+# ---------------------------------------------------------------------------
+
+
+def test_login_sets_up_session(svc, monkeypatch):
+    mock_oauth = MagicMock()
+    mock_oauth.cache_handler.get_cached_token.return_value = {"access_token": "tok"}
+    mock_oauth.validate_token.return_value = {"access_token": "tok"}
+    mock_oauth.is_token_expired.return_value = False
+
+    monkeypatch.setattr(
+        "shuffleupagus.services.spotify.service.SpotifyOAuth",
+        lambda **kwargs: mock_oauth,
+    )
+    mock_spotify_instance = MagicMock()
+    mock_spotify_instance._session = MagicMock()
+    monkeypatch.setattr(
+        "shuffleupagus.services.spotify.service.spotipy.Spotify",
+        lambda **kwargs: mock_spotify_instance,
+    )
+
+    svc.config = {
+        "client-id": "cid",
+        "client-secret": "csecret",
+        "scope": "user-library-read",
+    }
+    svc.login()
+
+    assert svc.spotify is mock_spotify_instance
+    assert svc._rate_limited is None
+
+
+# ---------------------------------------------------------------------------
+# _check_rate_limit
+# ---------------------------------------------------------------------------
+
+
+def test_check_rate_limit_no_cached_epoch(svc):
+    """No cached rate-limit entry means no error."""
+    svc._check_rate_limit()
+
+
+def test_check_rate_limit_expired(svc):
+    """Expired rate-limit entry is deleted and does not raise."""
+    svc.cache.write("rate_limit_until", time.time() - 10, ttl=999999)
+    svc._check_rate_limit()
+    assert svc.cache.read_stale("rate_limit_until") is None
+
+
+def test_check_rate_limit_active(svc):
+    """Active rate-limit raises RuntimeError with time info."""
+    future = time.time() + 7200
+    svc.cache.write("rate_limit_until", future, ttl=999999)
+    with pytest.raises(RuntimeError, match="rate-limited"):
+        svc._check_rate_limit()
+
+
+# ---------------------------------------------------------------------------
+# _acquire_token
+# ---------------------------------------------------------------------------
+
+
+def test_acquire_token_valid_cached(svc):
+    """Valid non-expired token does not trigger refresh or browser."""
+    creds = MagicMock()
+    creds.cache_handler.get_cached_token.return_value = {"access_token": "t"}
+    creds.validate_token.return_value = {"access_token": "t"}
+    creds.is_token_expired.return_value = False
+    svc._acquire_token(creds)
+    creds.refresh_access_token.assert_not_called()
+    creds.get_access_token.assert_not_called()
+
+
+def test_acquire_token_expired_refresh_succeeds(svc):
+    """Expired token with successful refresh does not prompt browser."""
+    creds = MagicMock()
+    creds.cache_handler.get_cached_token.return_value = {"refresh_token": "r"}
+    creds.validate_token.return_value = {"refresh_token": "r"}
+    creds.is_token_expired.return_value = True
+    svc._acquire_token(creds)
+    creds.refresh_access_token.assert_called_once_with("r")
+    creds.get_access_token.assert_not_called()
+
+
+def test_acquire_token_no_token_no_tty(svc, monkeypatch):
+    """No token and no TTY raises RuntimeError."""
+    creds = MagicMock()
+    creds.cache_handler.get_cached_token.return_value = None
+    creds.validate_token.return_value = None
+    monkeypatch.setattr("sys.stdin", MagicMock(isatty=lambda: False))
+    with pytest.raises(RuntimeError, match="No valid Spotify token"):
+        svc._acquire_token(creds)
+
+
+def test_acquire_token_expired_refresh_fails_no_tty(svc, monkeypatch):
+    """Token refresh fails without TTY raises RuntimeError."""
+    creds = MagicMock()
+    creds.cache_handler.get_cached_token.return_value = {"refresh_token": "r"}
+    creds.validate_token.return_value = {"refresh_token": "r"}
+    creds.is_token_expired.return_value = True
+    creds.refresh_access_token.side_effect = Exception("refresh failed")
+    monkeypatch.setattr("sys.stdin", MagicMock(isatty=lambda: False))
+    with pytest.raises(RuntimeError, match="refresh failed"):
+        svc._acquire_token(creds)
+
+
+def test_acquire_token_expired_refresh_fails_with_tty(svc, monkeypatch):
+    """Token refresh fails with TTY falls through to browser auth."""
+    creds = MagicMock()
+    creds.cache_handler.get_cached_token.return_value = {"refresh_token": "r"}
+    creds.validate_token.return_value = {"refresh_token": "r"}
+    creds.is_token_expired.return_value = True
+    creds.refresh_access_token.side_effect = Exception("refresh failed")
+    monkeypatch.setattr("sys.stdin", MagicMock(isatty=lambda: True))
+    svc._acquire_token(creds)
+    creds.get_access_token.assert_called_once_with(as_dict=False)
+
+
+def test_acquire_token_no_token_with_tty(svc, monkeypatch):
+    """No token with TTY triggers browser auth."""
+    creds = MagicMock()
+    creds.cache_handler.get_cached_token.return_value = None
+    creds.validate_token.return_value = None
+    monkeypatch.setattr("sys.stdin", MagicMock(isatty=lambda: True))
+    svc._acquire_token(creds)
+    creds.get_access_token.assert_called_once_with(as_dict=False)
+
+
+# ---------------------------------------------------------------------------
+# _call
+# ---------------------------------------------------------------------------
+
+
+def test_call_rate_limited_before_lock(svc):
+    """If already rate-limited, _call raises immediately."""
+    svc._rate_limited = "Rate limited"
+    with pytest.raises(RuntimeError, match="Rate limited"):
+        svc._call(lambda: None)
+
+
+def test_call_detects_429_with_retry_after(svc):
+    """429 with Retry-After caches the rate limit and raises."""
+    exc = spotipy.SpotifyException(429, -1, "rate limited")
+    exc.http_status = 429
+    exc.headers = {"Retry-After": "600"}
+
+    def boom():
+        raise exc
+
+    with pytest.raises(RuntimeError, match="rate-limited"):
+        svc._call(boom)
+
+    assert svc._rate_limited is not None
+    assert svc.cache.read_stale("rate_limit_until") is not None
+
+
+def test_call_detects_429_in_message(svc):
+    """429 detected via message string when http_status is missing."""
+    exc = Exception("HTTP Error 429 Too Many Requests")
+
+    def boom():
+        raise exc
+
+    with pytest.raises(RuntimeError, match="rate-limited"):
+        svc._call(boom)
+
+    assert svc._rate_limited is not None
+
+
+def test_call_reraises_non_429(svc):
+    """Non-rate-limit errors are re-raised unchanged."""
+    exc = spotipy.SpotifyException(500, -1, "server error")
+    exc.http_status = 500
+
+    def boom():
+        raise exc
+
+    with pytest.raises(spotipy.SpotifyException):
+        svc._call(boom)
+
+    assert svc._rate_limited is None
+
+
+def test_call_success(svc):
+    """Successful call returns the method's return value."""
+    result = svc._call(lambda: "ok")
+    assert result == "ok"
+
+
+# ---------------------------------------------------------------------------
+# close
+# ---------------------------------------------------------------------------
+
+
+def test_close_saves_cache(svc):
+    svc.cache = MagicMock()
+    svc.close()
+    svc.cache.save.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# get_artist (edge cases)
+# ---------------------------------------------------------------------------
+
+
+def test_get_artist_none_id_raises(svc):
+    """Artist object with None id raises ValueError."""
+    obj = Artist(None, "Name")
+    with pytest.raises(ValueError, match="Artist ID is missing"):
+        svc.get_artist(obj)
+
+
+def test_get_artist_from_object_cache_miss_fetches_api(svc):
+    """When Artist object is passed and cache misses, it uses the object (dict) directly."""
+    svc.spotify.artist.return_value = _artist_payload("a2", "Direct Artist")
+    artist = svc.get_artist("a2")
+    assert artist.id == "a2"
+    assert artist.name == "Direct Artist"
+    svc.spotify.artist.assert_called_once_with("a2")
+
+
+# ---------------------------------------------------------------------------
+# get_artist_tracks
+# ---------------------------------------------------------------------------
+
+
+def test_get_artist_tracks_empty_albums(svc):
+    """No albums means no tracks."""
+    svc.cache.write("artist:a1:albums", [])
+    svc.spotify.artist_albums.return_value = {"items": []}
+    tracks = svc.get_artist_tracks(Artist("a1", "A"))
+    assert tracks == []
+
+
+def test_get_artist_tracks_collects_from_albums(svc):
+    """Tracks from multiple albums are collected."""
+    svc.cache.write(
+        "artist:a1:albums",
+        [_album_payload("alb1", "A1"), _album_payload("alb2", "A2")],
+    )
+    track1 = _track_payload("t1", "T1", album_id="alb1")
+    track2 = _track_payload("t2", "T2", album_id="alb2")
+    svc.spotify.album_tracks.side_effect = [
+        {"items": [track1]},
+        {"items": [track2]},
+    ]
+    svc.spotify.artist.return_value = _artist_payload()
+
+    tracks = svc.get_artist_tracks(Artist("a1", "A"))
+    assert len(tracks) == 2
+
+
+def test_get_artist_tracks_album_error_skipped(svc):
+    """An error fetching one album's tracks doesn't fail the whole call."""
+    svc.cache.write(
+        "artist:a1:albums",
+        [_album_payload("alb1", "A1"), _album_payload("alb2", "A2")],
+    )
+    track2 = _track_payload("t2", "T2", album_id="alb2")
+    svc.spotify.album_tracks.side_effect = [
+        Exception("boom"),
+        {"items": [track2]},
+    ]
+    svc.spotify.artist.return_value = _artist_payload()
+
+    tracks = svc.get_artist_tracks(Artist("a1", "A"))
+    assert len(tracks) == 1
+
+
+# ---------------------------------------------------------------------------
+# get_album_by_id
+# ---------------------------------------------------------------------------
+
+
+def test_get_album_by_id_cache_miss(svc):
+    svc.spotify.album.return_value = _album_payload("alb1", "My Album")
+    album = svc.get_album_by_id("alb1")
+    assert album.id == "alb1"
+    assert album.name == "My Album"
+    svc.spotify.album.assert_called_once_with("alb1")
+
+
+def test_get_album_by_id_cache_hit(svc):
+    svc.cache.write("album:alb1", _album_payload("alb1", "Cached"))
+    album = svc.get_album_by_id("alb1")
+    assert album.name == "Cached"
+    svc.spotify.album.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# get_artist_albums (edge: fingerprint check fails)
+# ---------------------------------------------------------------------------
+
+
+def test_get_artist_albums_fingerprint_check_exception(svc):
+    """If the fingerprint check API call fails, fall back to full refetch."""
+    stale_albums = [_album_payload("alb1", "Old")]
+    svc.cache.write("artist:a1:albums", stale_albums, ttl=60.0)
+    svc.cache._conn.execute(
+        "UPDATE cache SET stored_at = ? WHERE key = ?",
+        (time.time() - 3600, "artist:a1:albums"),
+    )
+    svc.cache._conn.commit()
+
+    svc.spotify.artist_albums.side_effect = [
+        Exception("API error"),
+        {"items": [_album_payload("alb1", "Refetched")]},
+    ]
+
+    albums = svc.get_artist_albums(Artist("a1", "A"))
+    assert len(albums) == 1
+    assert albums[0].name == "Refetched"
+    assert svc.spotify.artist_albums.call_count == 2
+
+
+def test_get_artist_albums_none_response(svc):
+    """artist_albums returning None yields empty list."""
+    svc.spotify.artist_albums.return_value = None
+    albums = svc.get_artist_albums(Artist("a1", "A"))
+    assert albums == []
+
+
+# ---------------------------------------------------------------------------
+# get_playlist_id_for_name (pagination)
+# ---------------------------------------------------------------------------
+
+
+def test_get_playlist_id_for_name_paginated(svc):
+    """Playlist found on the second page of results."""
+    page1 = {"items": [{"id": f"pl{i}", "name": f"P{i}"} for i in range(50)]}
+    page2 = {
+        "items": [
+            {"id": "target", "name": "Target Playlist"},
+        ]
+    }
+    svc.spotify.current_user_playlists.side_effect = [page1, page2]
+    assert svc.get_playlist_id_for_name("Target Playlist") == "target"
+
+
+# ---------------------------------------------------------------------------
+# sync edge cases
+# ---------------------------------------------------------------------------
+
+
+def test_sync_with_none_tracks(svc):
+    """Passing None for tracks uses empty list."""
+    svc.spotify.current_user_playlists.return_value = {"items": [{"id": "pl1", "name": "P"}]}
+    svc.sync("P", None)
+    svc.spotify.playlist_replace_items.assert_called_once_with("pl1", [])
     svc.spotify.playlist_add_items.assert_not_called()
