@@ -1,12 +1,15 @@
 import json
+import os
 import re
+import sys
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 import requests
+import ytmusicapi
 from ytmusicapi import YTMusic
 from ytmusicapi.auth.oauth import OAuthCredentials, RefreshingToken
-from ytmusicapi.exceptions import YTMusicServerError
+from ytmusicapi.exceptions import YTMusicServerError, YTMusicUserError
 
 from ...core.config import get_filepath
 from ...core.model import Album, Artist, Service, Track
@@ -53,7 +56,43 @@ class YoutubeService(Service):
                 self._prompt_for_oauth(creds, auth_file)
                 self.client = YTMusic(str(auth_file), oauth_credentials=creds)
         else:
+            if not auth_file.exists():
+                logger.warning(f"{self.tag}* no browser auth file found, starting setup")
+                if not self._setup_browser_auth(auth_file):
+                    raise ValueError("YouTube browser auth setup failed")
             self.client = YTMusic(str(auth_file))
+            if not self._validate_browser_auth():
+                logger.warning(f"{self.tag}* browser cookies expired, starting re-auth")
+                if not self._setup_browser_auth(auth_file):
+                    raise ValueError("YouTube browser auth re-auth failed")
+                self.client = YTMusic(str(auth_file))
+
+    def _validate_browser_auth(self) -> bool:
+        """Check whether browser cookies are still valid."""
+        try:
+            self.client.get_account_info()
+        except YTMusicServerError, YTMusicUserError, KeyError, Exception:
+            return False
+        return True
+
+    def _setup_browser_auth(self, auth_file: Path) -> bool:
+        """Walk the user through browser cookie setup. Returns True on success."""
+        headers_raw = os.environ.get("YTMUSIC_HEADERS_RAW")
+        try:
+            if headers_raw:
+                ytmusicapi.setup(filepath=str(auth_file), headers_raw=headers_raw)
+            elif sys.stdin.isatty():
+                ytmusicapi.setup(filepath=str(auth_file))
+            else:
+                logger.error(
+                    f"{self.tag}* browser cookies expired and stdin is not"
+                    " a TTY — set YTMUSIC_HEADERS_RAW or re-run interactively"
+                )
+                return False
+        except Exception:
+            logger.exception(f"{self.tag}* browser auth setup failed")
+            return False
+        return True
 
     def _load_oauth_token(self, auth_file: Path) -> dict | None:
         """Return token dict if file exists and looks like an OAuth token, else None."""
