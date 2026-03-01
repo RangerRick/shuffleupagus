@@ -63,7 +63,6 @@ class SpotifyService(Service):
             status_retries=0,
         )
         self._acquire_token(creds)
-        self._check_rate_limit()
 
     def _acquire_token(self, creds: SpotifyOAuth):
         """Force token acquisition on the main thread.
@@ -93,15 +92,6 @@ class SpotifyService(Service):
             raise RuntimeError("No valid Spotify token. Run interactively to authenticate.")
 
         creds.get_access_token(as_dict=False)
-
-    def _check_rate_limit(self):
-        """Make a lightweight API call to detect rate limiting early."""
-        try:
-            self._call(self.spotify.current_user_playlists, limit=1)
-        except RuntimeError:
-            raise
-        except Exception as e:
-            logger.debug(f"{self.tag}rate limit check failed: {e}")
 
     def _call(self, method, *args, **kwargs):
         """Serialize Spotify API access and detect rate limiting."""
