@@ -406,6 +406,29 @@ def test_sync_clears_and_waits_for_cloud(svc):
     svc.client._session.post.assert_called()
 
 
+def test_sync_aborts_when_cloud_deletion_stalls(svc):
+    """If cloud never reports 0 tracks after deletion, abort with error."""
+    svc.get_playlist_id_for_name = MagicMock(return_value="pl1")
+    _stub_get_playlist_tracks(svc, [["old1"]])
+    # Cloud always returns 500 tracks — deletion never completes
+    _stub_get_playlist_length(svc, 500)
+
+    svc.client._auth_headers.return_value = {}
+
+    with (
+        patch(
+            "shuffleupagus.services.appleMusic.service.applescript.AppleScript",
+            side_effect=_mock_applescripts(),
+        ),
+        patch("shuffleupagus.services.appleMusic.service.time.sleep"),
+        pytest.raises(RuntimeError, match="Cloud still reports 500 tracks"),
+    ):
+        svc.sync("Playlist", ["t1", "t2"])
+
+    # Should not have attempted to add any tracks
+    svc.client._session.post.assert_not_called()
+
+
 def test_sync_verify_retries_missing_in_batch(svc):
     """Cloud count is short, cloud API identifies missing, retry adds them."""
     svc.get_playlist_id_for_name = MagicMock(return_value="pl1")

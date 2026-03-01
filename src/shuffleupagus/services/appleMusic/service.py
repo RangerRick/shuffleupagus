@@ -366,7 +366,7 @@ class AppleMusicService(Service):
             for attempt in range(3):
                 time.sleep(5)
                 cloud_count = self.__get_playlist_length(playlist_id)
-                if cloud_count >= expected_count:
+                if cloud_count == expected_count:
                     logger.info(f"{self.tag}  * verified batch {batch_num}: {cloud_count} tracks in cloud")
                     verified = True
                     break
@@ -413,15 +413,21 @@ class AppleMusicService(Service):
             logger.info(f"{self.tag}  * clearing existing tracks in playlist '{playlist_name}'")
             self.__clear_playlist(playlist_name)
 
-            # Wait for cloud API to reflect the deletion
+            # Wait for cloud API to reflect the deletion — this can
+            # take minutes on slow connections.  Poll every 10s for up
+            # to 5 minutes.
             logger.info(f"{self.tag}  * waiting for cloud to process deletion")
-            for _ in range(6):
-                time.sleep(5)
+            for i in range(30):
+                time.sleep(10)
                 cloud_count = self.__get_playlist_length(playlist_id)
                 if cloud_count == 0:
+                    logger.info(f"{self.tag}  * cloud confirmed empty after {(i + 1) * 10}s")
                     break
+                logger.info(f"{self.tag}    * cloud still has {cloud_count} tracks ({(i + 1) * 10}s elapsed)")
             else:
-                logger.warning(f"{self.tag}  ! cloud still shows tracks after 30s, proceeding anyway")
+                raise RuntimeError(
+                    f"Cloud still reports {cloud_count} tracks after 5 minutes — aborting to avoid duplicates"
+                )
 
         logger.info(f"{self.tag}  * publishing {len(tracks)} songs to the playlist")
         self.__add_tracks(playlist_id, tracks)
