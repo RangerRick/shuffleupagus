@@ -344,37 +344,76 @@ class AppleMusicService(Service):
             if retries == 0:
                 raise RuntimeError(f"Failed to add tracks after 3 retries ({r.status_code} {r.reason})")
 
-    def __add_tracks(self, playlist_id: str, track_ids: list[str], verify: bool = True) -> None:
-        """Add tracks in batches of 80, verifying after each batch."""
-        for i in range(0, len(track_ids), 80):
-            batch = track_ids[i : i + 80]
+    def __get_local_track_count(self, playlist_name: str) -> int:
+        """Get the track count from the local Music.app via AppleScript."""
+        scpt = applescript.AppleScript(
+            '''
+            tell application "Music"
+                set thePlaylist to (get playlist "'''
+            + playlist_name
+            + """")
+                return count of tracks of thePlaylist
+            end tell
+        """
+        )
+        return int(scpt.run())
+
+    def __add_tracks(
+        self,
+        playlist_id: str,
+        playlist_name: str,
+        track_ids: list[str],
+    ) -> None:
+        """Add tracks in batches of 80, verifying after each batch.
+
+        Checks the local Music.app track count first (fast). If the
+        count is short, falls back to the cloud API to identify which
+        tracks are missing and re-queues them.
+        """
+        remaining = list(track_ids)
+        expected_count = 0
+        batch_num = 0
+
+        while remaining:
+            batch = remaining[:80]
+            remaining = remaining[80:]
+            batch_num += 1
             self.__post_batch(playlist_id, batch)
+            expected_count += len(batch)
 
-            if not verify:
-                continue
-
-            # Verify all tracks added so far are present
-            expected_so_far = set(track_ids[: i + 80])
+            verified = False
             for attempt in range(3):
                 time.sleep(5)
+                local_count = self.__get_local_track_count(playlist_name)
+                if local_count >= expected_count:
+                    logger.info(f"{self.tag}  * verified batch {batch_num}: {local_count} tracks in Music.app")
+                    verified = True
+                    break
+
+                logger.warning(
+                    f"{self.tag}  ! batch {batch_num}"
+                    f" verify attempt {attempt + 1}:"
+                    f" Music.app has {local_count},"
+                    f" expected {expected_count}"
+                )
+                # Use cloud API to find exactly which tracks are missing
+                expected_so_far = set(track_ids[:expected_count])
                 actual = set(self.__get_playlist_tracks(playlist_id))
                 missing = expected_so_far - actual
-                if not missing:
-                    logger.info(f"{self.tag}  * verified batch {i // 80 + 1}: {len(expected_so_far)} tracks present")
-                    break
-                logger.warning(
-                    f"{self.tag}  ! batch {i // 80 + 1} verify attempt {attempt + 1}:"
-                    f" {len(missing)} tracks missing, retrying"
-                )
-                self.__post_batch(playlist_id, list(missing))
-            else:
-                time.sleep(5)
+                if missing:
+                    self.__post_batch(playlist_id, list(missing))
+
+            if not verified:
+                # Final fallback: identify missing via cloud, re-queue
+                expected_so_far = set(track_ids[:expected_count])
                 actual = set(self.__get_playlist_tracks(playlist_id))
                 still_missing = expected_so_far - actual
                 if still_missing:
                     logger.warning(
-                        f"{self.tag}  ! batch {i // 80 + 1}: {len(still_missing)} tracks still missing after retries"
+                        f"{self.tag}  ! batch {batch_num}: {len(still_missing)} tracks still missing, re-queuing"
                     )
+                    remaining = list(still_missing) + remaining
+                    expected_count -= len(still_missing)
 
     def sync(self, playlist_name: str, tracks: list[str] | None = None):
         if not tracks:
@@ -406,4 +445,4 @@ class AppleMusicService(Service):
                 logger.warning(f"{self.tag}  ! cloud still shows tracks after 30s, proceeding anyway")
 
         logger.info(f"{self.tag}  * publishing {len(tracks)} songs to the playlist")
-        self.__add_tracks(playlist_id, tracks)
+        self.__add_tracks(playlist_id, playlist_name, tracks)
