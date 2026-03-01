@@ -45,10 +45,12 @@ def _finalize_service(
     logger.info(f"{service.tag}* finished updating {service.name}")
 
 
-def _load_services(config: Config) -> list[Service]:
+def _load_services(config: Config, only: list[str] | None = None) -> list[Service]:
     services: list[Service] = []
     for plugin in load_plugins():
         plugin_name = plugin.__name__.split(".")[-1]
+        if only is not None and plugin_name not in only:
+            continue
         if config.is_enabled(plugin_name):
             services.append(plugin.create(config))
         else:
@@ -87,13 +89,22 @@ def main():
         default="INFO",
         help="set the logging level",
     )
+    parser.add_argument(
+        "--only-services",
+        default=None,
+        help="comma-separated list of services to run (e.g. spotify,youtube)",
+    )
 
     args = parser.parse_args()
 
     init_logging(args.log_level)
 
+    only = None
+    if args.only_services:
+        only = [s.strip() for s in args.only_services.split(",")]
+
     config = Config()
-    services = _load_services(config)
+    services = _load_services(config, only=only)
 
     def _handle_sigint(_signum, _frame):
         logger.warning("* interrupted, exiting")
