@@ -16,8 +16,6 @@ from .model import SpotifyAlbum, SpotifyArtist, SpotifyTrack, sanitize_id
 _FINGERPRINT_TTL = 60 * 60 * 24  # 24 hours
 
 _REQUEST_TIMEOUT = 30
-# Don't let urllib3 silently sleep on 429 Retry-After (can be hours).
-_RETRY_STATUS_CODES = (500, 502, 503, 504)
 
 
 class SpotifyService(Service):
@@ -44,7 +42,7 @@ class SpotifyService(Service):
         self.spotify = spotipy.Spotify(
             auth_manager=creds,
             requests_timeout=_REQUEST_TIMEOUT,
-            status_forcelist=_RETRY_STATUS_CODES,
+            retries=0,
         )
         self._acquire_token(creds)
         self._check_rate_limit()
