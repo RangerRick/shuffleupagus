@@ -327,17 +327,17 @@ def _stub_get_playlist_length(svc, value=0):
     svc._AppleMusicService__get_playlist_length = MagicMock(return_value=value)
 
 
-def _stub_local_track_count(svc, return_values):
-    """Patch __get_local_track_count to return successive values."""
+def _stub_get_playlist_length_seq(svc, return_values):
+    """Patch __get_playlist_length to return successive values."""
     it = iter(return_values)
-    svc._AppleMusicService__get_local_track_count = MagicMock(side_effect=lambda _name: next(it))
+    svc._AppleMusicService__get_playlist_length = MagicMock(side_effect=lambda _pid: next(it))
 
 
 def test_sync(svc):
     svc.get_playlist_id_for_name = MagicMock(return_value="pl1")
-    # sync reads current (empty), local count confirms 3 after batch
+    # sync reads current (empty), cloud count confirms 3 after batch
     _stub_get_playlist_tracks(svc, [[]])
-    _stub_local_track_count(svc, [3])
+    _stub_get_playlist_length_seq(svc, [3])
 
     post_resp = MagicMock()
     post_resp.status_code = 204
@@ -355,9 +355,9 @@ def test_sync(svc):
 def test_sync_batches_tracks(svc):
     svc.get_playlist_id_for_name = MagicMock(return_value="pl1")
     tracks = [f"t{i}" for i in range(90)]
-    # sync reads current (empty), local count confirms 80 then 90
+    # sync reads current (empty), cloud count confirms 80 then 90
     _stub_get_playlist_tracks(svc, [[]])
-    _stub_local_track_count(svc, [80, 90])
+    _stub_get_playlist_length_seq(svc, [80, 90])
 
     post_resp = MagicMock()
     post_resp.status_code = 204
@@ -385,10 +385,9 @@ def test_sync_skips_when_unchanged(svc):
 def test_sync_clears_and_waits_for_cloud(svc):
     """When playlist is non-empty but different, clear + wait for cloud."""
     svc.get_playlist_id_for_name = MagicMock(return_value="pl1")
-    # First read: stale tracks; cloud length poll returns 0; local count confirms 2
+    # First read: stale tracks; deletion poll returns 0; batch verify returns 2
     _stub_get_playlist_tracks(svc, [["old1"]])
-    _stub_get_playlist_length(svc, 0)
-    _stub_local_track_count(svc, [2])
+    _stub_get_playlist_length_seq(svc, [0, 2])
 
     post_resp = MagicMock()
     post_resp.status_code = 204
@@ -408,13 +407,13 @@ def test_sync_clears_and_waits_for_cloud(svc):
 
 
 def test_sync_verify_retries_missing_in_batch(svc):
-    """Local count is short, cloud API identifies missing, retry adds them."""
+    """Cloud count is short, cloud API identifies missing, retry adds them."""
     svc.get_playlist_id_for_name = MagicMock(return_value="pl1")
     # sync reads current: empty (no clear)
-    # local count returns 2 (short), cloud returns [t1, t2], retry adds t3
-    # local count returns 3 (good)
+    # cloud count returns 2 (short), cloud tracks return [t1, t2]
+    # retry adds t3, cloud count returns 3 (good)
     _stub_get_playlist_tracks(svc, [[], ["t1", "t2"]])
-    _stub_local_track_count(svc, [2, 3])
+    _stub_get_playlist_length_seq(svc, [2, 3])
 
     post_resp = MagicMock()
     post_resp.status_code = 204
