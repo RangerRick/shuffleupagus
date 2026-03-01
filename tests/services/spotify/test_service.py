@@ -1,5 +1,6 @@
 """Tests for SpotifyService with all network calls mocked."""
 
+import threading
 from unittest.mock import MagicMock
 
 import pytest
@@ -41,6 +42,7 @@ def svc(tmp_path, monkeypatch):
     svc.cache = Cache("spotify")
     svc.config = {}
     svc.spotify = MagicMock()
+    svc._api_lock = threading.Lock()
     svc.tag = "[spotify] "
     return svc
 

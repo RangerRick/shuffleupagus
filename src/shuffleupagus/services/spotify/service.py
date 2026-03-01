@@ -1,4 +1,6 @@
 import copy
+import sys
+import threading
 from concurrent.futures import as_completed
 
 import spotipy
@@ -13,10 +15,14 @@ from .model import SpotifyAlbum, SpotifyArtist, SpotifyTrack, sanitize_id
 _FINGERPRINT_TTL = 60 * 60 * 24  # 24 hours
 
 
+_REQUEST_TIMEOUT = 30
+
+
 class SpotifyService(Service):
     name = "spotify"
 
     spotify: spotipy.Spotify
+    _api_lock: threading.Lock
 
     def _require_config(self, key: str) -> str:
         val = self.config.get(key)
@@ -25,13 +31,48 @@ class SpotifyService(Service):
         return val
 
     def login(self):
+        self._api_lock = threading.Lock()
         creds = SpotifyOAuth(
             client_id=self._require_config("client-id"),
             client_secret=self._require_config("client-secret"),
             scope=self._require_config("scope"),
             redirect_uri="http://localhost:9090/",
+            requests_timeout=_REQUEST_TIMEOUT,
         )
-        self.spotify = spotipy.Spotify(auth_manager=creds)
+        self.spotify = spotipy.Spotify(
+            auth_manager=creds,
+            requests_timeout=_REQUEST_TIMEOUT,
+        )
+        self._acquire_token(creds)
+
+    def _acquire_token(self, creds: SpotifyOAuth):
+        """Force token acquisition on the main thread.
+
+        Interactive auth (browser) works here; in worker threads it would
+        block forever.  When there is no TTY, fail fast instead of hanging.
+        """
+        token_info = creds.validate_token(
+            creds.cache_handler.get_cached_token(),
+        )
+        if token_info is not None and not creds.is_token_expired(token_info):
+            return
+
+        if token_info is not None:
+            try:
+                creds.refresh_access_token(token_info["refresh_token"])
+            except Exception as e:
+                if not sys.stdin.isatty():
+                    raise RuntimeError(
+                        "Spotify token expired and refresh failed. Run interactively to re-authenticate."
+                    ) from e
+                logger.warning(f"{self.tag}token refresh failed ({e}), re-authenticating")
+            else:
+                return
+
+        if not sys.stdin.isatty():
+            raise RuntimeError("No valid Spotify token. Run interactively to authenticate.")
+
+        creds.get_access_token(as_dict=False)
 
     def close(self):
         self.cache.save()
@@ -56,7 +97,8 @@ class SpotifyService(Service):
             if artist_obj:
                 ret = artist_obj
             else:
-                ret = self.spotify.artist(artist_id)
+                with self._api_lock:
+                    ret = self.spotify.artist(artist_id)
             self.cache.write(cache_key, ret)
 
         return SpotifyArtist.from_dict(ret)
@@ -67,7 +109,8 @@ class SpotifyService(Service):
         cache_key = "album:" + album_id
         ret = self.cache.read(cache_key)
         if not ret:
-            ret = self.spotify.album(album_id)
+            with self._api_lock:
+                ret = self.spotify.album(album_id)
             self.cache.write(cache_key, ret)
 
         return SpotifyAlbum.from_dict(ret)
@@ -82,7 +125,8 @@ class SpotifyService(Service):
             stale = self.cache.read_stale(cache_key)
             if stale is not None:
                 try:
-                    latest = self.spotify.artist_albums(artist.id, limit=1)
+                    with self._api_lock:
+                        latest = self.spotify.artist_albums(artist.id, limit=1)
                     if latest and "items" in latest and latest["items"]:
                         latest_id = latest["items"][0]["id"]
                         cached_fp = self.cache.read_stale(fp_key)
@@ -95,7 +139,8 @@ class SpotifyService(Service):
                     logger.debug(f"{self.tag}* fingerprint check failed for {artist.id}: {e}")
 
         if ret is None:
-            album = self.spotify.artist_albums(artist.id)
+            with self._api_lock:
+                album = self.spotify.artist_albums(artist.id)
             if album is not None and "items" in album:
                 ret = album["items"]
             self.cache.write(cache_key, ret if ret is not None else [])
@@ -115,7 +160,8 @@ class SpotifyService(Service):
 
         ret = self.cache.read(cache_key)
         if not ret:
-            t = self.spotify.album_tracks(album.id)
+            with self._api_lock:
+                t = self.spotify.album_tracks(album.id)
             if t is not None and "items" in t:
                 ret = t["items"]
             self.cache.write(cache_key, ret)
@@ -163,7 +209,8 @@ class SpotifyService(Service):
 
         ret = self.cache.read(cache_key)
         if not ret:
-            ret = self.spotify.artist_top_tracks(artist.id)
+            with self._api_lock:
+                ret = self.spotify.artist_top_tracks(artist.id)
             self.cache.write(cache_key, ret)
 
         tracks = []
@@ -195,7 +242,8 @@ class SpotifyService(Service):
     def get_playlist_id_for_name(self, playlist_name: str) -> str:
         offset = 0
         while True:
-            results = self.spotify.current_user_playlists(limit=50, offset=offset)
+            with self._api_lock:
+                results = self.spotify.current_user_playlists(limit=50, offset=offset)
             if results and "items" in results:
                 items = results["items"]
                 for item in items:
@@ -210,8 +258,10 @@ class SpotifyService(Service):
         playlist_id = self.get_playlist_id_for_name(playlist_name)
 
         playlist_tracks = copy.deepcopy(tracks or [])
-        self.spotify.playlist_replace_items(playlist_id, playlist_tracks[0:80])
+        with self._api_lock:
+            self.spotify.playlist_replace_items(playlist_id, playlist_tracks[0:80])
         del playlist_tracks[0:80]
         while len(playlist_tracks) > 0:
-            self.spotify.playlist_add_items(playlist_id, playlist_tracks[0:80])
+            with self._api_lock:
+                self.spotify.playlist_add_items(playlist_id, playlist_tracks[0:80])
             del playlist_tracks[0:80]

@@ -15,8 +15,6 @@ def _run_service(service: Service, config, args) -> None:
     excluded_albums = [service.sanitize_id(a) for a in config.excluded_albums(service.name)]
     excluded_tracks = [service.sanitize_id(a) for a in config.excluded_tracks(service.name)]
 
-    service.login()
-
     playlist_track_ids = service.generate_playlist(
         artists,
         excluded_albums,
@@ -88,6 +86,7 @@ def main():
 
     for service in services:
         service.preflight()
+        service.login()
 
     def _handle_sigint(_signum, _frame):
         logger.warning("* interrupted, exiting")
