@@ -458,12 +458,15 @@ def test_preflight_browser_auth_missing_file(browser_svc):
 
 
 def test_preflight_validates_browser_auth_in_oauth_mode(browser_svc):
-    """OAuth mode (client-id + client-secret set) → preflight still validates browser cookies."""
+    """OAuth mode (client-id + client-secret set) → preflight still validates browser cookies
+    using a separate browser cookie file (auth-file stem + '_browser')."""
     svc, tmp_path = browser_svc
     svc.config["client-id"] = "some-id"
     svc.config["client-secret"] = "some-secret"
+
     auth_file = tmp_path / "browser_auth.json"
-    auth_file.write_text("{}")
+    browser_file = tmp_path / "browser_auth_browser.json"
+    browser_file.write_text("{}")
 
     with (
         patch("shuffleupagus.services.youtube.service.get_filepath", return_value=str(auth_file)),
@@ -474,4 +477,4 @@ def test_preflight_validates_browser_auth_in_oauth_mode(browser_svc):
         mock_yt.return_value = mock_client
         svc.preflight()
 
-    mock_yt.assert_called_once_with(str(auth_file))
+    mock_yt.assert_called_once_with(str(browser_file))

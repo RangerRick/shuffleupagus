@@ -45,16 +45,25 @@ class YoutubeService(Service):
     def _auth_file(self) -> Path:
         return Path(get_filepath(self._require_config("auth-file")))
 
+    def _browser_auth_file(self) -> Path:
+        """Browser cookie file — same as auth-file for browser-only auth,
+        separate file when OAuth is configured (since auth-file holds the
+        OAuth token)."""
+        base = self._auth_file()
+        if self._is_browser_auth():
+            return base
+        return base.with_stem(base.stem + "_browser")
+
     def preflight(self):
-        auth_file = self._auth_file()
-        if not auth_file.exists():
+        browser_file = self._browser_auth_file()
+        if not browser_file.exists():
             logger.warning(f"{self.tag}* no browser auth file found, starting setup")
-            if not self._setup_browser_auth(auth_file):
+            if not self._setup_browser_auth(browser_file):
                 raise ValueError("YouTube browser auth setup failed")
-        client = YTMusic(str(auth_file))
+        client = YTMusic(str(browser_file))
         if not self._validate_browser_auth(client):
             logger.warning(f"{self.tag}* browser cookies expired, starting re-auth")
-            if not self._setup_browser_auth(auth_file):
+            if not self._setup_browser_auth(browser_file):
                 raise ValueError("YouTube browser auth re-auth failed")
 
     def login(self):
