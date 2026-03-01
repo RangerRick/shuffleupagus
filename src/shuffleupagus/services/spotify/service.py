@@ -1,4 +1,5 @@
 import copy
+import datetime
 import sys
 import threading
 from concurrent.futures import as_completed
@@ -14,8 +15,9 @@ from .model import SpotifyAlbum, SpotifyArtist, SpotifyTrack, sanitize_id
 # Short enough to catch new releases, long enough to avoid hammering the API every run.
 _FINGERPRINT_TTL = 60 * 60 * 24  # 24 hours
 
-
 _REQUEST_TIMEOUT = 30
+# Don't let urllib3 silently sleep on 429 Retry-After (can be hours).
+_RETRY_STATUS_CODES = (500, 502, 503, 504)
 
 
 class SpotifyService(Service):
@@ -42,8 +44,10 @@ class SpotifyService(Service):
         self.spotify = spotipy.Spotify(
             auth_manager=creds,
             requests_timeout=_REQUEST_TIMEOUT,
+            status_forcelist=_RETRY_STATUS_CODES,
         )
         self._acquire_token(creds)
+        self._check_rate_limit()
 
     def _acquire_token(self, creds: SpotifyOAuth):
         """Force token acquisition on the main thread.
@@ -74,6 +78,32 @@ class SpotifyService(Service):
 
         creds.get_access_token(as_dict=False)
 
+    def _check_rate_limit(self):
+        """Make a lightweight API call to detect rate limiting early."""
+        try:
+            self._call(self.spotify.current_user_playlists, limit=1)
+        except RuntimeError:
+            raise
+        except Exception as e:
+            logger.debug(f"{self.tag}rate limit check failed: {e}")
+
+    def _call(self, method, *args, **kwargs):
+        """Serialize Spotify API access and detect rate limiting."""
+        with self._api_lock:
+            try:
+                return method(*args, **kwargs)
+            except spotipy.SpotifyException as e:
+                if e.http_status == 429:
+                    retry_after = int(e.headers.get("Retry-After", 0))
+                    retry_time = datetime.datetime.now(tz=datetime.UTC).astimezone() + datetime.timedelta(
+                        seconds=retry_after
+                    )
+                    raise RuntimeError(
+                        f"Spotify rate-limited. Try again after {retry_time.strftime('%Y-%m-%d %H:%M')} "
+                        f"({retry_after // 3600}h {(retry_after % 3600) // 60}m from now)"
+                    ) from e
+                raise
+
     def close(self):
         self.cache.save()
 
@@ -97,8 +127,7 @@ class SpotifyService(Service):
             if artist_obj:
                 ret = artist_obj
             else:
-                with self._api_lock:
-                    ret = self.spotify.artist(artist_id)
+                ret = self._call(self.spotify.artist, artist_id)
             self.cache.write(cache_key, ret)
 
         return SpotifyArtist.from_dict(ret)
@@ -109,8 +138,7 @@ class SpotifyService(Service):
         cache_key = "album:" + album_id
         ret = self.cache.read(cache_key)
         if not ret:
-            with self._api_lock:
-                ret = self.spotify.album(album_id)
+            ret = self._call(self.spotify.album, album_id)
             self.cache.write(cache_key, ret)
 
         return SpotifyAlbum.from_dict(ret)
@@ -125,8 +153,7 @@ class SpotifyService(Service):
             stale = self.cache.read_stale(cache_key)
             if stale is not None:
                 try:
-                    with self._api_lock:
-                        latest = self.spotify.artist_albums(artist.id, limit=1)
+                    latest = self._call(self.spotify.artist_albums, artist.id, limit=1)
                     if latest and "items" in latest and latest["items"]:
                         latest_id = latest["items"][0]["id"]
                         cached_fp = self.cache.read_stale(fp_key)
@@ -139,8 +166,7 @@ class SpotifyService(Service):
                     logger.debug(f"{self.tag}* fingerprint check failed for {artist.id}: {e}")
 
         if ret is None:
-            with self._api_lock:
-                album = self.spotify.artist_albums(artist.id)
+            album = self._call(self.spotify.artist_albums, artist.id)
             if album is not None and "items" in album:
                 ret = album["items"]
             self.cache.write(cache_key, ret if ret is not None else [])
@@ -160,8 +186,7 @@ class SpotifyService(Service):
 
         ret = self.cache.read(cache_key)
         if not ret:
-            with self._api_lock:
-                t = self.spotify.album_tracks(album.id)
+            t = self._call(self.spotify.album_tracks, album.id)
             if t is not None and "items" in t:
                 ret = t["items"]
             self.cache.write(cache_key, ret)
@@ -209,8 +234,7 @@ class SpotifyService(Service):
 
         ret = self.cache.read(cache_key)
         if not ret:
-            with self._api_lock:
-                ret = self.spotify.artist_top_tracks(artist.id)
+            ret = self._call(self.spotify.artist_top_tracks, artist.id)
             self.cache.write(cache_key, ret)
 
         tracks = []
@@ -242,8 +266,7 @@ class SpotifyService(Service):
     def get_playlist_id_for_name(self, playlist_name: str) -> str:
         offset = 0
         while True:
-            with self._api_lock:
-                results = self.spotify.current_user_playlists(limit=50, offset=offset)
+            results = self._call(self.spotify.current_user_playlists, limit=50, offset=offset)
             if results and "items" in results:
                 items = results["items"]
                 for item in items:
@@ -258,10 +281,8 @@ class SpotifyService(Service):
         playlist_id = self.get_playlist_id_for_name(playlist_name)
 
         playlist_tracks = copy.deepcopy(tracks or [])
-        with self._api_lock:
-            self.spotify.playlist_replace_items(playlist_id, playlist_tracks[0:80])
+        self._call(self.spotify.playlist_replace_items, playlist_id, playlist_tracks[0:80])
         del playlist_tracks[0:80]
         while len(playlist_tracks) > 0:
-            with self._api_lock:
-                self.spotify.playlist_add_items(playlist_id, playlist_tracks[0:80])
+            self._call(self.spotify.playlist_add_items, playlist_id, playlist_tracks[0:80])
             del playlist_tracks[0:80]

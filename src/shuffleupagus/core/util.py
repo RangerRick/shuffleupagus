@@ -56,9 +56,9 @@ def load_plugins():
 
 
 # see: https://web.archive.org/web/20250107040006/http://keyj.emphy.de/balanced-shuffle/
-def spread_artist_playlists(artist_playlists, vip_artist_ids) -> list[str]:
+def spread_artist_playlists(artist_playlists, vip_artist_ids, tag="") -> list[str]:
 
-    logging.info("* spreading out artist playlists")
+    logging.info(f"{tag}* spreading out artist playlists")
     max_length = 0
 
     for artistId in artist_playlists:
@@ -104,7 +104,7 @@ def spread_artist_playlists(artist_playlists, vip_artist_ids) -> list[str]:
         # replace the artist playlist with the new spread playlist
         artist_playlists[artistId] = new_p
 
-    logging.info("* merging artist playlists")
+    logging.info(f"{tag}* merging artist playlists")
     artist_ids = list(filter(lambda id: id not in vip_artist_ids, artist_playlists.keys()))
     random.shuffle(artist_ids)
 
@@ -115,7 +115,7 @@ def spread_artist_playlists(artist_playlists, vip_artist_ids) -> list[str]:
         # so that they get mixed in with the other artists
         artist_ids.insert(random.randint(min_position, max_position), vip_id)
 
-    logging.info(f"* combining {max_length} slots for {len(artist_ids)} artists")
+    logging.info(f"{tag}* combining {max_length} slots for {len(artist_ids)} artists")
     # build the final playlist, merging the artist spreads
     playlist = []
     for i in range(max_length):

@@ -149,11 +149,15 @@ class _StubService:
     def generate_playlist(self, artist_ids, excluded_albums=None, excluded_tracks=None, vip_artist_ids=None):
         from shuffleupagus.core.model import Service
 
-        return Service.generate_playlist(
+        artist_playlists = Service.collect_tracks(
             self,
             artist_ids=artist_ids,
             excluded_album_ids=excluded_albums or [],
             excluded_track_ids=excluded_tracks or [],
+        )
+        return Service.generate_playlist(
+            self,
+            artist_playlists=artist_playlists,
             vip_artist_ids=vip_artist_ids or [],
         )
 

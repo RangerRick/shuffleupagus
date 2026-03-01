@@ -185,20 +185,19 @@ class Service:
     def get_playlist_id_for_name(self, playlist_name: str) -> str:
         raise NotImplementedError
 
-    def generate_playlist(
+    def collect_tracks(
         self,
         artist_ids: list[str] | None = None,
         excluded_album_ids: list[str] | None = None,
         excluded_track_ids: list[str] | None = None,
-        vip_artist_ids: list[str] | None = None,
-    ) -> list[str]:
+    ) -> dict[str, list[Track]]:
+        """Fetch per-artist track lists (threaded, IO-heavy)."""
         _artist_ids: list[str] = [] if artist_ids is None else artist_ids
         _excluded_album_ids: list[str] = [] if excluded_album_ids is None else excluded_album_ids
         _excluded_track_ids: list[str] = [] if excluded_track_ids is None else excluded_track_ids
-        _vip_artist_ids: list[str] = [] if vip_artist_ids is None else vip_artist_ids
         artist_playlists: dict[str, list[Track]] = {}
         total = len(_artist_ids)
-        logger.info(f"{self.tag}* generating playlist for {total} artists")
+        logger.info(f"{self.tag}* collecting tracks for {total} artists")
 
         def _process(idx: int, artist_id: str) -> tuple[str, list[Track]]:
             tag = self.tag
@@ -261,7 +260,16 @@ class Service:
             except Exception:
                 logger.exception(f"{self.tag}  ! failed to process artist {artist_id}, skipping")
 
-        return spread_artist_playlists(artist_playlists, _vip_artist_ids)
+        return artist_playlists
+
+    def generate_playlist(
+        self,
+        artist_playlists: dict[str, list[Track]],
+        vip_artist_ids: list[str] | None = None,
+    ) -> list[str]:
+        """Spread and merge collected tracks into a final playlist (fast, CPU-only)."""
+        _vip_artist_ids: list[str] = [] if vip_artist_ids is None else vip_artist_ids
+        return spread_artist_playlists(artist_playlists, _vip_artist_ids, self.tag)
 
     def sync(self, playlist_name: str, tracks: list[str] | None = None) -> None:
         raise NotImplementedError
