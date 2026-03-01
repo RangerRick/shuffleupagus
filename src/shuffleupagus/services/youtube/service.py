@@ -139,7 +139,10 @@ class YoutubeService(Service):
         "     The raw headers look like 'key: value' pairs, one per line.\n"
         "\n"
         "Paste the raw headers below, then press Enter followed by Ctrl-D (EOF).\n"
-        "Alternatively, set the YTMUSIC_HEADERS_RAW environment variable.\n"
+        "\n"
+        "Tip: if pasting stalls in your terminal, copy the headers to your\n"
+        "clipboard and use the env var instead:\n"
+        '  export YTMUSIC_HEADERS_RAW="$(pbpaste)" && shuffleupagus\n'
     )
 
     def _setup_browser_auth(self, auth_file: Path) -> bool:
