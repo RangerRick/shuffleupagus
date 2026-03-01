@@ -57,12 +57,12 @@ class YoutubeService(Service):
     def preflight(self):
         browser_file = self._browser_auth_file()
         if not browser_file.exists():
-            logger.warning(f"{self.tag}* no browser auth file found, starting setup")
+            logger.warning(f"{self.tag}* browser cookie file not found ({browser_file.name}), starting setup")
             if not self._setup_browser_auth(browser_file):
                 raise ValueError("YouTube browser auth setup failed")
         client = YTMusic(str(browser_file))
         if not self._validate_browser_auth(client):
-            logger.warning(f"{self.tag}* browser cookies expired, starting re-auth")
+            logger.warning(f"{self.tag}* browser cookies expired or invalid, starting re-auth")
             if not self._setup_browser_auth(browser_file):
                 raise ValueError("YouTube browser auth re-auth failed")
 
@@ -96,6 +96,20 @@ class YoutubeService(Service):
             return False
         return True
 
+    _BROWSER_AUTH_INSTRUCTIONS = (
+        "Browser cookie auth is required to browse YouTube Music artist pages.\n"
+        "\n"
+        "To get your request headers:\n"
+        "  1. Open https://music.youtube.com in Firefox or Chrome\n"
+        "  2. Make sure you are logged in\n"
+        "  3. Open DevTools (F12) → Network tab\n"
+        "  4. Click on any request to music.youtube.com\n"
+        "  5. Copy the full 'Request Headers' section\n"
+        "\n"
+        "Paste the headers below, then press Enter followed by Ctrl-D (EOF).\n"
+        "Alternatively, set the YTMUSIC_HEADERS_RAW environment variable.\n"
+    )
+
     def _setup_browser_auth(self, auth_file: Path) -> bool:
         """Walk the user through browser cookie setup. Returns True on success."""
         headers_raw = os.environ.get("YTMUSIC_HEADERS_RAW")
@@ -103,6 +117,7 @@ class YoutubeService(Service):
             if headers_raw:
                 ytmusicapi.setup(filepath=str(auth_file), headers_raw=headers_raw)
             elif sys.stdin.isatty():
+                print(self._BROWSER_AUTH_INSTRUCTIONS)
                 ytmusicapi.setup(filepath=str(auth_file))
             else:
                 logger.error(
