@@ -54,17 +54,48 @@ class YoutubeService(Service):
             return base
         return base.with_stem(base.stem + "_browser")
 
+    _MAX_AUTH_ATTEMPTS = 3
+
     def preflight(self):
         browser_file = self._browser_auth_file()
         if not browser_file.exists():
-            logger.warning(f"{self.tag}* browser cookie file not found ({browser_file.name}), starting setup")
+            logger.warning(
+                f"{self.tag}* browser cookie file not found ({browser_file.name}), starting setup",
+            )
+            self._setup_browser_auth_with_retry(browser_file)
+            return
+
+        if not self._try_validate_browser_file(browser_file):
+            logger.warning(
+                f"{self.tag}* browser cookies expired or invalid, starting re-auth",
+            )
+            self._setup_browser_auth_with_retry(browser_file)
+
+    def _try_validate_browser_file(self, browser_file: Path) -> bool:
+        """Try to load and validate browser cookies. Returns False on any failure."""
+        try:
+            client = YTMusic(str(browser_file))
+        except (YTMusicUserError, YTMusicServerError, KeyError) as exc:
+            logger.warning(f"{self.tag}* browser cookie file is invalid: {exc}")
+            return False
+        return self._validate_browser_auth(client)
+
+    def _setup_browser_auth_with_retry(self, browser_file: Path) -> None:
+        """Run browser auth setup, validate, and retry on failure."""
+        for attempt in range(1, self._MAX_AUTH_ATTEMPTS + 1):
             if not self._setup_browser_auth(browser_file):
                 raise ValueError("YouTube browser auth setup failed")
-        client = YTMusic(str(browser_file))
-        if not self._validate_browser_auth(client):
-            logger.warning(f"{self.tag}* browser cookies expired or invalid, starting re-auth")
-            if not self._setup_browser_auth(browser_file):
-                raise ValueError("YouTube browser auth re-auth failed")
+            if self._try_validate_browser_file(browser_file):
+                return
+            logger.warning(
+                f"{self.tag}* browser cookies invalid after setup"
+                f" (attempt {attempt}/{self._MAX_AUTH_ATTEMPTS}),"
+                " please try again",
+            )
+            browser_file.unlink(missing_ok=True)
+        raise ValueError(
+            f"YouTube browser auth failed after {self._MAX_AUTH_ATTEMPTS} attempts",
+        )
 
     def login(self):
         auth_file = self._auth_file()

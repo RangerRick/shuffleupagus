@@ -4,7 +4,7 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
-from ytmusicapi.exceptions import YTMusicServerError
+from ytmusicapi.exceptions import YTMusicServerError, YTMusicUserError
 
 from shuffleupagus.core.cache import Cache
 from shuffleupagus.services.youtube.service import YoutubeService
@@ -382,9 +382,12 @@ def test_preflight_browser_auth_expired_interactive_reauth(browser_svc):
         patch("shuffleupagus.services.youtube.service.sys") as mock_sys,
     ):
         mock_sys.stdin.isatty.return_value = True
-        mock_client = MagicMock()
-        mock_client.get_artist.side_effect = YTMusicServerError("400")
-        mock_yt.return_value = mock_client
+        # First call (initial validate) fails; second call (post-setup validate) succeeds
+        fail_client = MagicMock()
+        fail_client.get_artist.side_effect = YTMusicServerError("400")
+        ok_client = MagicMock()
+        ok_client.get_artist.return_value = {"channelId": "UCtest", "name": "Test"}
+        mock_yt.side_effect = [fail_client, ok_client]
 
         svc.preflight()
 
@@ -403,9 +406,11 @@ def test_preflight_browser_auth_expired_env_var(browser_svc, monkeypatch):
         patch("shuffleupagus.services.youtube.service.YTMusic") as mock_yt,
         patch("shuffleupagus.services.youtube.service.ytmusicapi.setup") as mock_setup,
     ):
-        mock_client = MagicMock()
-        mock_client.get_artist.side_effect = YTMusicServerError("400")
-        mock_yt.return_value = mock_client
+        fail_client = MagicMock()
+        fail_client.get_artist.side_effect = YTMusicServerError("400")
+        ok_client = MagicMock()
+        ok_client.get_artist.return_value = {"channelId": "UCtest", "name": "Test"}
+        mock_yt.side_effect = [fail_client, ok_client]
 
         svc.preflight()
 
@@ -429,7 +434,7 @@ def test_preflight_browser_auth_expired_no_tty(browser_svc, monkeypatch):
         mock_client.get_artist.side_effect = YTMusicServerError("400")
         mock_yt.return_value = mock_client
 
-        with pytest.raises(ValueError, match="re-auth failed"):
+        with pytest.raises(ValueError, match="setup failed"):
             svc.preflight()
 
 
@@ -455,6 +460,56 @@ def test_preflight_browser_auth_missing_file(browser_svc):
         svc.preflight()
 
     mock_setup.assert_called_once_with(filepath=str(auth_file))
+
+
+def test_preflight_retries_on_bad_cookies(browser_svc):
+    """Bad cookies after setup → retry up to max attempts, succeed on second try."""
+    svc, tmp_path = browser_svc
+    auth_file = tmp_path / "browser_auth.json"
+    # File doesn't exist — triggers setup path
+
+    with (
+        patch("shuffleupagus.services.youtube.service.get_filepath", return_value=str(auth_file)),
+        patch("shuffleupagus.services.youtube.service.YTMusic") as mock_yt,
+        patch("shuffleupagus.services.youtube.service.ytmusicapi.setup") as mock_setup,
+        patch("shuffleupagus.services.youtube.service.sys") as mock_sys,
+    ):
+        mock_sys.stdin.isatty.return_value = True
+        mock_setup.side_effect = lambda **kw: Path(kw["filepath"]).write_text("{}")
+
+        # First post-setup validate fails (bad cookies), second succeeds
+        bad_client = MagicMock()
+        bad_client.get_artist.side_effect = YTMusicUserError("missing __Secure-3PAPISID")
+        ok_client = MagicMock()
+        ok_client.get_artist.return_value = {"channelId": "UCtest", "name": "Test"}
+        mock_yt.side_effect = [bad_client, ok_client]
+
+        svc.preflight()
+
+    assert mock_setup.call_count == 2
+
+
+def test_preflight_exhausts_retries(browser_svc):
+    """Bad cookies on every attempt → raises after max attempts."""
+    svc, tmp_path = browser_svc
+    auth_file = tmp_path / "browser_auth.json"
+
+    with (
+        patch("shuffleupagus.services.youtube.service.get_filepath", return_value=str(auth_file)),
+        patch("shuffleupagus.services.youtube.service.YTMusic") as mock_yt,
+        patch("shuffleupagus.services.youtube.service.ytmusicapi.setup") as mock_setup,
+        patch("shuffleupagus.services.youtube.service.sys") as mock_sys,
+    ):
+        mock_sys.stdin.isatty.return_value = True
+        mock_setup.side_effect = lambda **kw: Path(kw["filepath"]).write_text("{}")
+        bad_client = MagicMock()
+        bad_client.get_artist.side_effect = YTMusicUserError("missing cookie")
+        mock_yt.return_value = bad_client
+
+        with pytest.raises(ValueError, match="failed after 3 attempts"):
+            svc.preflight()
+
+    assert mock_setup.call_count == 3
 
 
 def test_preflight_validates_browser_auth_in_oauth_mode(browser_svc):
