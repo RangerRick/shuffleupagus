@@ -2,7 +2,7 @@ import json
 import os
 import re
 import sys
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import as_completed
 from pathlib import Path
 
 import requests
@@ -46,8 +46,6 @@ class YoutubeService(Service):
         return Path(get_filepath(self._require_config("auth-file")))
 
     def preflight(self):
-        if not self._is_browser_auth():
-            return
         auth_file = self._auth_file()
         if not auth_file.exists():
             logger.warning(f"{self.tag}* no browser auth file found, starting setup")
@@ -356,17 +354,15 @@ class YoutubeService(Service):
             return []
 
         tracks: list[Track] = []
-        with ThreadPoolExecutor(max_workers=8) as executor:
-            futures = {executor.submit(self.get_album_tracks, album): album for album in albums}
-            for future in as_completed(futures):
-                album = futures[future]
-                try:
-                    tracks += future.result()
-                except Exception:
-                    logger.exception(
-                        f"{self.tag}  ! error fetching tracks for album"
-                        f" '{album.name}' (artist: {artist.name}), skipping"
-                    )
+        futures = {self.pool.submit(self.get_album_tracks, album): album for album in albums}
+        for future in as_completed(futures):
+            album = futures[future]
+            try:
+                tracks += future.result()
+            except Exception:
+                logger.exception(
+                    f"{self.tag}  ! error fetching tracks for album '{album.name}' (artist: {artist.name}), skipping"
+                )
 
         return tracks
 

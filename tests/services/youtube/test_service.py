@@ -457,13 +457,21 @@ def test_preflight_browser_auth_missing_file(browser_svc):
     mock_setup.assert_called_once_with(filepath=str(auth_file))
 
 
-def test_preflight_skipped_for_oauth(browser_svc):
-    """OAuth mode (client-id + client-secret set) → preflight is a no-op."""
+def test_preflight_validates_browser_auth_in_oauth_mode(browser_svc):
+    """OAuth mode (client-id + client-secret set) → preflight still validates browser cookies."""
     svc, tmp_path = browser_svc
     svc.config["client-id"] = "some-id"
     svc.config["client-secret"] = "some-secret"
+    auth_file = tmp_path / "browser_auth.json"
+    auth_file.write_text("{}")
 
-    with patch("shuffleupagus.services.youtube.service.YTMusic") as mock_yt:
+    with (
+        patch("shuffleupagus.services.youtube.service.get_filepath", return_value=str(auth_file)),
+        patch("shuffleupagus.services.youtube.service.YTMusic") as mock_yt,
+    ):
+        mock_client = MagicMock()
+        mock_client.get_artist.return_value = {"channelId": "UCtest", "name": "Test"}
+        mock_yt.return_value = mock_client
         svc.preflight()
 
-    mock_yt.assert_not_called()
+    mock_yt.assert_called_once_with(str(auth_file))

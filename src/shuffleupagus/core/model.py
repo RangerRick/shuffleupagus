@@ -109,10 +109,26 @@ class Track(ShufObject):
         return self.duration_ms > duration_ms
 
 
+_DEFAULT_POOL_WORKERS = 8
+
+
 class Service:
     name: str
     cache: Cache
     cache_cutoff: float = CACHE_DEFAULT_CUTOFF
+    executor: ThreadPoolExecutor | None = None
+    _default_executor: ThreadPoolExecutor | None = None
+
+    @property
+    def pool(self) -> ThreadPoolExecutor:
+        """Shared executor if set, otherwise a lazily-created default."""
+        if self.executor is not None:
+            return self.executor
+        if self._default_executor is None:
+            self._default_executor = ThreadPoolExecutor(
+                max_workers=_DEFAULT_POOL_WORKERS,
+            )
+        return self._default_executor
 
     def __init__(self, config: Config):
         svc_config = config.service(self.name)
@@ -230,17 +246,14 @@ class Service:
             random.shuffle(playlist)
             return artist_id, playlist
 
-        with ThreadPoolExecutor(max_workers=4) as executor:
-            futures = {
-                executor.submit(_process, idx, artist_id): artist_id for idx, artist_id in enumerate(_artist_ids)
-            }
-            for future in as_completed(futures):
-                artist_id = futures[future]
-                try:
-                    a_id, playlist = future.result()
-                    artist_playlists[a_id] = playlist
-                except Exception:
-                    logger.exception(f"{self.tag}  ! failed to process artist {artist_id}, skipping")
+        futures = {self.pool.submit(_process, idx, artist_id): artist_id for idx, artist_id in enumerate(_artist_ids)}
+        for future in as_completed(futures):
+            artist_id = futures[future]
+            try:
+                a_id, playlist = future.result()
+                artist_playlists[a_id] = playlist
+            except Exception:
+                logger.exception(f"{self.tag}  ! failed to process artist {artist_id}, skipping")
 
         return spread_artist_playlists(artist_playlists, _vip_artist_ids)
 

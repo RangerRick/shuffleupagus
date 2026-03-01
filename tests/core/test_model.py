@@ -1,3 +1,5 @@
+from concurrent.futures import ThreadPoolExecutor
+
 import pytest
 
 from shuffleupagus.core.model import (
@@ -11,6 +13,7 @@ from shuffleupagus.core.model import (
 )
 
 # --- ShufObject ---
+
 
 def test_shufobject_matches_id():
     obj = ShufObject("abc", "Name")
@@ -30,20 +33,24 @@ def test_shufobject_sanitize_id_passthrough():
 
 # --- Album ---
 
+
 def test_album_release_date_from_full_string():
     import datetime
+
     a = Album("id", "Title", "2023-06-15")
     assert a.release_date == datetime.date(2023, 6, 15)
 
 
 def test_album_release_date_from_year_only():
     import datetime
+
     a = Album("id", "Title", "2020")
     assert a.release_date == datetime.date(2020, 1, 1)
 
 
 def test_album_release_date_from_date_object():
     import datetime
+
     d = datetime.date(2021, 3, 1)
     a = Album("id", "Title", d)
     assert a.release_date == d
@@ -65,6 +72,7 @@ def test_album_str():
 
 
 # --- Track ---
+
 
 def _make_track(name="Song", duration_ms=180_000, id="t1", isrc=None):
     return Track(id=id, name=name, duration_ms=duration_ms, isrc=isrc)
@@ -113,6 +121,7 @@ def test_track_is_excluded():
 
 # --- generate_playlist (via a minimal stub service) ---
 
+
 class _StubTrack(Track):
     pass
 
@@ -126,6 +135,7 @@ class _StubService:
     """Minimal Service-like object that calls generate_playlist directly."""
 
     tag = "[test] "
+    pool = ThreadPoolExecutor(max_workers=2)
 
     def get_artist(self, artist):
         return Artist(artist, artist)
@@ -138,6 +148,7 @@ class _StubService:
 
     def generate_playlist(self, artist_ids, excluded_albums=None, excluded_tracks=None, vip_artist_ids=None):
         from shuffleupagus.core.model import Service
+
         return Service.generate_playlist(
             self,
             artist_ids=artist_ids,
@@ -197,14 +208,14 @@ def test_generate_playlist_deduplicates(monkeypatch):
 
         def get_artist_tracks(self, artist):
             return [
-                _track("id-b", "Dup", 120_000),   # same hash as id-a → deduped out
+                _track("id-b", "Dup", 120_000),  # same hash as id-a → deduped out
                 _track("id-c", "Other", 120_000),  # different name → kept
             ]
 
     result = Svc().generate_playlist(["artist1"])
-    assert "id-a" in result       # top track kept
-    assert "id-b" not in result   # artist track deduped out (matches id-a hash)
-    assert "id-c" in result       # different track kept
+    assert "id-a" in result  # top track kept
+    assert "id-b" not in result  # artist track deduped out (matches id-a hash)
+    assert "id-c" in result  # different track kept
 
 
 def test_generate_playlist_requires_album():
