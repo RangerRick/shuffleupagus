@@ -32,6 +32,7 @@ class SpotifyService(Service):
 
     def login(self):
         self._api_lock = threading.Lock()
+        self._rate_limited: str | None = None
         creds = SpotifyOAuth(
             client_id=self._require_config("client-id"),
             client_secret=self._require_config("client-secret"),
@@ -43,6 +44,7 @@ class SpotifyService(Service):
             auth_manager=creds,
             requests_timeout=_REQUEST_TIMEOUT,
             retries=0,
+            status_retries=0,
         )
         self._acquire_token(creds)
         self._check_rate_limit()
@@ -87,19 +89,26 @@ class SpotifyService(Service):
 
     def _call(self, method, *args, **kwargs):
         """Serialize Spotify API access and detect rate limiting."""
+        if self._rate_limited:
+            raise RuntimeError(self._rate_limited)
         with self._api_lock:
+            if self._rate_limited:
+                raise RuntimeError(self._rate_limited)
             try:
                 return method(*args, **kwargs)
-            except spotipy.SpotifyException as e:
-                if e.http_status == 429:
-                    retry_after = int(e.headers.get("Retry-After", 0))
+            except (spotipy.SpotifyException, Exception) as e:
+                status = getattr(e, "http_status", None)
+                msg = str(e)
+                if status == 429 or "429" in msg:
+                    retry_after = int(getattr(e, "headers", {}).get("Retry-After", 0))
                     retry_time = datetime.datetime.now(tz=datetime.UTC).astimezone() + datetime.timedelta(
                         seconds=retry_after
                     )
-                    raise RuntimeError(
+                    self._rate_limited = (
                         f"Spotify rate-limited. Try again after {retry_time.strftime('%Y-%m-%d %H:%M')} "
                         f"({retry_after // 3600}h {(retry_after % 3600) // 60}m from now)"
-                    ) from e
+                    )
+                    raise RuntimeError(self._rate_limited) from e
                 raise
 
     def close(self):

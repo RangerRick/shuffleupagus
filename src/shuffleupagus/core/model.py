@@ -257,6 +257,8 @@ class Service:
             try:
                 a_id, playlist = future.result()
                 artist_playlists[a_id] = playlist
+            except RuntimeError:
+                raise
             except Exception:
                 logger.exception(f"{self.tag}  ! failed to process artist {artist_id}, skipping")
 

@@ -43,6 +43,7 @@ def svc(tmp_path, monkeypatch):
     svc.config = {}
     svc.spotify = MagicMock()
     svc._api_lock = threading.Lock()
+    svc._rate_limited = None
     svc.tag = "[spotify] "
     return svc
 
