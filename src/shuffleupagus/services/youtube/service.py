@@ -205,13 +205,25 @@ class YoutubeService(Service):
             return token.access_token
         return None
 
+    def _check_api_response(self, resp: requests.Response) -> None:
+        """Raise RuntimeError with details for YouTube API errors."""
+        if resp.status_code in (403, 429):
+            body = resp.json() if resp.content else {}
+            reason = ""
+            for err in body.get("error", {}).get("errors", []):
+                reason = err.get("reason", "")
+            if reason in ("quotaExceeded", "rateLimitExceeded"):
+                raise RuntimeError(f"YouTube API quota exceeded ({reason}). Quota resets at midnight Pacific Time.")
+            raise RuntimeError(f"YouTube API {resp.status_code}: {reason or resp.text}")
+        resp.raise_for_status()
+
     def _data_api_get(self, url: str, params: dict) -> dict:
         """Authenticated GET to YouTube Data API v3."""
         access_token = self._get_access_token()
         if not access_token:
             raise ValueError("YouTube Data API v3 requires OAuth authentication")
         resp = requests.get(url, headers={"Authorization": f"Bearer {access_token}"}, params=params, timeout=30)
-        resp.raise_for_status()
+        self._check_api_response(resp)
         return resp.json()
 
     def _data_api_post(self, url: str, body: dict, params: dict | None = None) -> dict:
@@ -226,7 +238,7 @@ class YoutubeService(Service):
             params=params or {},
             timeout=30,
         )
-        resp.raise_for_status()
+        self._check_api_response(resp)
         return resp.json()
 
     def _data_api_delete(self, url: str, params: dict) -> None:
@@ -235,7 +247,7 @@ class YoutubeService(Service):
         if not access_token:
             raise ValueError("YouTube Data API v3 requires OAuth authentication")
         resp = requests.delete(url, headers={"Authorization": f"Bearer {access_token}"}, params=params, timeout=30)
-        resp.raise_for_status()
+        self._check_api_response(resp)
 
     def close(self):
         self.cache.save()
