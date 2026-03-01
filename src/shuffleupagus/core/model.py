@@ -252,15 +252,22 @@ class Service:
             return artist_id, playlist
 
         futures = {self.artist_pool.submit(_process, idx, aid): aid for idx, aid in enumerate(_artist_ids)}
+        fatal_error = None
         for future in as_completed(futures):
             artist_id = futures[future]
             try:
                 a_id, playlist = future.result()
                 artist_playlists[a_id] = playlist
-            except RuntimeError:
-                raise
+            except RuntimeError as e:
+                fatal_error = e
+                for f in futures:
+                    f.cancel()
+                break
             except Exception:
                 logger.exception(f"{self.tag}  ! failed to process artist {artist_id}, skipping")
+
+        if fatal_error is not None:
+            raise fatal_error
 
         return artist_playlists
 

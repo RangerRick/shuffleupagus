@@ -119,6 +119,9 @@ def main():
     def _worker(service):
         try:
             results[service.name] = _collect_service(service, config)
+        except RuntimeError as exc:
+            logger.warning(f"{service.tag}! {exc}")
+            errors.append((service.name, exc))
         except Exception as exc:
             logger.exception(f"Service {service.name} raised an exception")
             errors.append((service.name, exc))
