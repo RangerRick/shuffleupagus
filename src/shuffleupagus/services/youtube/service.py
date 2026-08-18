@@ -190,8 +190,12 @@ class YoutubeService(Service):
             data = json.loads(auth_file.read_text())
             if "refresh_token" in data and "access_token" in data:
                 return data
-        except FileNotFoundError, json.JSONDecodeError, OSError:
+        except FileNotFoundError:
             pass
+        except json.JSONDecodeError as exc:
+            logger.warning(f"{self.tag}* ignoring corrupt OAuth token file {auth_file}: {exc}")
+        except OSError as exc:
+            logger.error(f"{self.tag}* cannot read OAuth token file {auth_file}: {exc}")
         return None
 
     def _prompt_for_oauth(self, creds: OAuthCredentials, auth_file: Path) -> None:
