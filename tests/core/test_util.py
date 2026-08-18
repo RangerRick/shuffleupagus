@@ -1,5 +1,8 @@
+import email.utils
+import time
+
 from shuffleupagus.core.model import Album, Track
-from shuffleupagus.core.util import spread_artist_playlists
+from shuffleupagus.core.util import parse_retry_after, spread_artist_playlists
 
 
 def _track(id):
@@ -55,3 +58,38 @@ def test_spread_vip_positioning(monkeypatch):
     vip_indices = [result.index(t) for t in result if t in ("v1", "v2")]
     reg_indices = [result.index(t) for t in result if t in ("r1", "r2")]
     assert max(vip_indices) < max(reg_indices)
+
+
+# ---------------------------------------------------------------------------
+# parse_retry_after
+# ---------------------------------------------------------------------------
+
+
+def test_parse_retry_after_delta_seconds():
+    assert parse_retry_after("3661") == 3661
+    assert parse_retry_after(" 42 ") == 42
+    assert parse_retry_after(0) == 0
+
+
+def test_parse_retry_after_absent():
+    assert parse_retry_after(None) == 0
+
+
+def test_parse_retry_after_malformed_is_zero():
+    """A non-numeric, non-date value is treated as absent, not raised on."""
+    for value in ("soon", "", "-", "12abc", "NaN"):
+        assert parse_retry_after(value) == 0
+
+
+def test_parse_retry_after_http_date():
+    """RFC 9110 permits an HTTP-date, which must become seconds from now."""
+    future = email.utils.formatdate(time.time() + 3600, usegmt=True)
+    seconds = parse_retry_after(future)
+    # Allow a little slack for clock/rounding between formatdate and parsing.
+    assert 3500 <= seconds <= 3600
+
+
+def test_parse_retry_after_past_http_date_is_zero():
+    """A date already in the past yields 0 rather than a negative delay."""
+    past = email.utils.formatdate(time.time() - 3600, usegmt=True)
+    assert parse_retry_after(past) == 0

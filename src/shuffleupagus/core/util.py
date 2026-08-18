@@ -1,9 +1,11 @@
 import datetime
+import email.utils
 import importlib
 import logging
 import os
 import pkgutil
 import random
+import time
 
 import coloredlogs
 
@@ -36,6 +38,28 @@ def service_tag(name: str) -> str:
     """Return a short prefix tag for the given service name."""
     tags = _NERD_FONT_TAGS if _use_nerd_fonts() else _PLAIN_TAGS
     return tags.get(name, f"[{name}] ")
+
+
+def parse_retry_after(value: object) -> int:
+    """Parse a Retry-After header value into whole seconds from now.
+
+    RFC 9110 section 10.2.3 permits either delta-seconds or an HTTP-date, so a
+    non-numeric value is spec-legal rather than malformed. Date parsing is left
+    to email.utils, which implements the HTTP-date formats.
+
+    Returns 0 when the value is absent, unparseable, or already past. Callers
+    treat 0 as "no usable Retry-After" and fall back to a generic message.
+    """
+    if value is None:
+        return 0
+    text = str(value).strip()
+    if text.isdigit():
+        return int(text)
+    parsed = email.utils.parsedate_tz(text)
+    if parsed is None:
+        return 0
+    delta = email.utils.mktime_tz(parsed) - time.time()
+    return max(int(delta), 0)
 
 
 def format_retry_message(service_label: str, retry_epoch: float, remaining: float) -> str:

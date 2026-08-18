@@ -6,7 +6,7 @@ import applemusicpy
 import applescript
 
 from ...core.model import Album, Artist, Service, Track
-from ...core.util import logger
+from ...core.util import logger, parse_retry_after
 from .model import AppleMusicAlbum, AppleMusicArtist, AppleMusicTrack, sanitize_id
 
 _REQUEST_TIMEOUT = 30
@@ -61,12 +61,8 @@ class AppleMusicService(Service):
         if status == 429:
             # Honour Retry-After, which applemusicpy's own retry loop ignores, and
             # persist the window so the next run fails fast instead of hammering.
-            retry_after = 0
             headers = getattr(response, "headers", None) or {}
-            try:
-                retry_after = int(headers.get("Retry-After", 0))
-            except TypeError, ValueError:
-                retry_after = 0
+            retry_after = parse_retry_after(headers.get("Retry-After"))
             if retry_after > 0:
                 raise RuntimeError(self._record_rate_limit("Apple Music", retry_after)) from e
             raise RuntimeError("Apple Music rate-limited (no Retry-After header). Try again later.") from e

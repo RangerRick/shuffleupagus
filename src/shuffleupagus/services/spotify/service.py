@@ -9,7 +9,7 @@ from spotipy.oauth2 import SpotifyOAuth
 from urllib3.util.retry import Retry
 
 from ...core.model import Album, Artist, Service, Track
-from ...core.util import logger
+from ...core.util import logger, parse_retry_after
 from .model import SpotifyAlbum, SpotifyArtist, SpotifyTrack, sanitize_id
 
 # Fingerprint TTL: how long before we re-check whether a new album has been released.
@@ -25,7 +25,7 @@ _NO_RETRY_AFTER_MESSAGE = "Spotify rate-limited (no Retry-After header). Try aga
 def _retry_after_seconds(exc: Exception) -> int:
     """Read the Retry-After header off a rate-limit exception, 0 when absent."""
     headers = getattr(exc, "headers", None) or {}
-    return int(headers.get("Retry-After", 0))
+    return parse_retry_after(headers.get("Retry-After"))
 
 
 class SpotifyService(Service):
