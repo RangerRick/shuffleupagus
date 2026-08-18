@@ -19,11 +19,18 @@ env:
   # uv reads this to pick the interpreter, matching .python-version.
   UV_PYTHON: "3.14"
 
+# macOS runners, not Linux. This project drives Music.app through AppleScript,
+# so it depends on py-applescript -> pyobjc-core, which refuses to build
+# anywhere else ("PyObjC requires macOS to build"). Installing the project at
+# all is impossible on ubuntu today. Making Linux CI possible needs environment
+# markers on those dependencies and lazy imports in the appleMusic plugin — see
+# the follow-up issue.
+
 jobs:
   validate:
     name: lint and types
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
+    runs-on: macos-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -38,8 +45,8 @@ jobs:
 
   test:
     name: tests and coverage
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
+    runs-on: macos-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -57,8 +64,8 @@ jobs:
 
   smoke:
     name: smoke test
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
+    runs-on: macos-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -73,8 +80,8 @@ jobs:
 
   workflows:
     name: workflow audit
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
+    runs-on: macos-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -93,12 +100,17 @@ jobs:
 
   shell:
     name: shell scripts
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
+    runs-on: macos-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      # shellcheck and shfmt are both preinstalled on ubuntu-latest runners.
+      # Neither is guaranteed on the macOS image, so install both rather than
+      # letting a missing tool read as a passing job.
+      - name: install shellcheck and shfmt
+        env:
+          HOMEBREW_NO_AUTO_UPDATE: "1"
+        run: brew install --quiet shellcheck shfmt
       - run: shellcheck scripts/*.sh
       - run: shfmt -d scripts/*.sh
