@@ -36,9 +36,15 @@
   // Package- or manager-specific rules
   "packageRules": [
     {
+      // Enumerated, not "!major". A negation-only matchUpdateTypes list also
+      // matches majors: the matcher tests ["major", "bump"] with .some(), and
+      // "bump" is not excluded by "!major", so the rule returns true. rangeStrategy
+      // "bump" plus the open-ended ">=" constraints in [project.dependencies] make
+      // isBump true for majors, so every runtime major would have automerged here.
+      // Do not add "bump" to this list either — that reopens the same hole.
       "groupName": "auto-merge non-major dependencies",
       "groupSlug": "all-non-major",
-      "matchUpdateTypes": ["!major"],
+      "matchUpdateTypes": ["minor", "patch", "pin", "digest"],
       "automerge": true,
     },
     {
@@ -58,6 +64,14 @@
       "groupSlug": "pytest",
       "matchManagers": ["pep621"],
       "matchPackageNames": ["/^pytest/"],
+    },
+
+    // Last, so it overrides the groupName and automerge set by any rule above.
+    // Majors get their own PR and a human read.
+    {
+      "matchUpdateTypes": ["major"],
+      "groupName": null,
+      "automerge": false,
     },
   ],
 
