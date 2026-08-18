@@ -230,7 +230,7 @@ def test_get_playlist_id_for_name_not_found(svc):
 def _mock_playlist_items(svc, track_ids):
     """Make playlist_items read back exactly track_ids, one page at a time."""
 
-    def _items(_playlist_id, fields=None, limit=100, offset=0):
+    def _items(_playlist_id, limit=100, offset=0, **_kwargs):
         page = track_ids[offset : offset + limit]
         return {"items": [{"track": {"id": tid}} for tid in page]}
 
@@ -259,7 +259,7 @@ def test_sync_readds_missing_tracks(svc):
     svc.spotify.current_user_playlists.return_value = {"items": [{"id": "pl1", "name": "P"}]}
     reads = [["t1"], ["t1", "t2"]]
 
-    def _items(_playlist_id, fields=None, limit=100, offset=0):
+    def _items(_playlist_id, limit=100, offset=0, **_kwargs):
         page = reads[0] if len(reads) == 1 else reads.pop(0)
         return {"items": [{"track": {"id": tid}} for tid in page[offset : offset + limit]]}
 
@@ -281,18 +281,19 @@ def test_sync_raises_when_tracks_never_verify(svc):
 # ---------------------------------------------------------------------------
 
 
+def _rate_limit_exc(headers):
+    """Build the 429 SpotifyException spotipy raises, carrying response headers."""
+    return spotipy.SpotifyException(429, -1, "rate limited", headers=headers)
+
+
 def test_format_rate_limit_with_retry_after():
-    exc = Exception("rate limited")
-    exc.headers = {"Retry-After": "3661"}
-    msg, epoch = _format_rate_limit(exc)
+    msg, epoch = _format_rate_limit(_rate_limit_exc({"Retry-After": "3661"}))
     assert "1h 1m from now" in msg
     assert epoch > 0
 
 
 def test_format_rate_limit_without_retry_after():
-    exc = Exception("rate limited")
-    exc.headers = {}
-    msg, epoch = _format_rate_limit(exc)
+    msg, epoch = _format_rate_limit(_rate_limit_exc({}))
     assert "no Retry-After header" in msg
     assert epoch == 0
 
@@ -527,7 +528,8 @@ def test_close_saves_cache(svc):
 
 def test_get_artist_none_id_raises(svc):
     """Artist object with None id raises ValueError."""
-    obj = Artist(None, "Name")
+    # Deliberately invalid: exercises the runtime guard, so the type error is the point.
+    obj = Artist(None, "Name")  # ty: ignore[invalid-argument-type]
     with pytest.raises(ValueError, match="Artist ID is missing"):
         svc.get_artist(obj)
 

@@ -3,6 +3,7 @@
 from unittest.mock import MagicMock, patch
 
 import pytest
+import requests
 
 from shuffleupagus.core.cache import Cache
 from shuffleupagus.services.appleMusic.service import AppleMusicService
@@ -109,11 +110,10 @@ def test_get_artist_sanitizes_url_id(svc):
 
 
 def _http_error(status_code):
+    """Build the HTTPError applemusicpy raises once its own retries are exhausted."""
     resp = MagicMock()
     resp.status_code = status_code
-    exc = Exception(f"HTTP {status_code}")
-    exc.response = resp
-    return exc
+    return requests.exceptions.HTTPError(f"HTTP {status_code}", response=resp)
 
 
 @pytest.mark.parametrize("status_code", [401, 403, 429])

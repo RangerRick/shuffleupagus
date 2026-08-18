@@ -149,14 +149,16 @@ class _StubService:
     def generate_playlist(self, artist_ids, excluded_albums=None, excluded_tracks=None, vip_artist_ids=None):
         from shuffleupagus.core.model import Service
 
+        # Duck-typed on purpose: this stub supplies only what the two Service
+        # methods under test actually touch, so it deliberately isn't a Service.
         artist_playlists = Service.collect_tracks(
-            self,
+            self,  # ty: ignore[invalid-argument-type]
             artist_ids=artist_ids,
             excluded_album_ids=excluded_albums or [],
             excluded_track_ids=excluded_tracks or [],
         )
         return Service.generate_playlist(
-            self,
+            self,  # ty: ignore[invalid-argument-type]
             artist_playlists=artist_playlists,
             vip_artist_ids=vip_artist_ids or [],
         )
