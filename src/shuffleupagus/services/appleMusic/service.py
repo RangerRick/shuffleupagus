@@ -17,6 +17,19 @@ _REQUEST_TIMEOUT = 30
 _MAX_CLIENT_RETRIES = 2
 
 
+def _applescript_str(value: str) -> str:
+    """Escape a value for embedding in an AppleScript double-quoted string literal.
+
+    Backslashes are doubled before quotes are escaped, otherwise the backslash
+    introduced for the quote gets escaped in turn. AppleScript string literals
+    cannot hold a raw line break and have no escape sequence for one, so a name
+    carrying one is rejected instead of silently producing a broken script.
+    """
+    if "\n" in value or "\r" in value:
+        raise ValueError(f"Playlist name cannot contain a line break: {value!r}")
+    return value.replace("\\", "\\\\").replace('"', '\\"')
+
+
 class AppleMusicService(Service):
     name = "appleMusic"
 
@@ -327,13 +340,12 @@ class AppleMusicService(Service):
 
     def __clear_playlist(self, playlist_name: str) -> None:
         """Delete all tracks from a playlist via AppleScript and wait."""
+        name = _applescript_str(playlist_name)
         scpt = applescript.AppleScript(
-            '''
+            f"""
             tell application "Music" to run
             tell application "Music"
-                set thePlaylist to (get playlist "'''
-            + playlist_name
-            + """")
+                set thePlaylist to (get playlist "{name}")
                 delete every track of thePlaylist
             end tell
         """
@@ -342,11 +354,9 @@ class AppleMusicService(Service):
 
         logger.info(f"{self.tag}  * waiting for Music.app to process the deletion")
         count_scpt = applescript.AppleScript(
-            '''
+            f"""
             tell application "Music"
-                set thePlaylist to (get playlist "'''
-            + playlist_name
-            + """")
+                set thePlaylist to (get playlist "{name}")
                 return count of tracks of thePlaylist
             end tell
         """

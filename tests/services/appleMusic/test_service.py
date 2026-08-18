@@ -7,7 +7,7 @@ import pytest
 import requests
 
 from shuffleupagus.core.cache import Cache
-from shuffleupagus.services.appleMusic.service import AppleMusicService
+from shuffleupagus.services.appleMusic.service import AppleMusicService, _applescript_str
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -767,3 +767,52 @@ def test_sync_empty_tracks_skips(svc):
     # No API calls should have been made
     svc.client._session.post.assert_not_called()
     svc.client._session.get.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# AppleScript string escaping
+# ---------------------------------------------------------------------------
+
+
+def test_applescript_str_escapes_quotes_and_backslashes():
+    assert _applescript_str('My "Best" Mix') == 'My \\"Best\\" Mix'
+    assert _applescript_str("back\\slash") == "back\\\\slash"
+    # Backslash is doubled before the quote is escaped, so the quote's escape
+    # character is not itself escaped.
+    assert _applescript_str('a\\"b') == 'a\\\\\\"b'
+
+
+def test_applescript_str_leaves_plain_text_alone():
+    assert _applescript_str("Shuffleupagus Test") == "Shuffleupagus Test"
+
+
+@pytest.mark.parametrize("bad", ["two\nlines", "carriage\rreturn"])
+def test_applescript_str_rejects_line_breaks(bad):
+    with pytest.raises(ValueError, match="line break"):
+        _applescript_str(bad)
+
+
+def test_clear_playlist_escapes_quoted_name(svc):
+    """A playlist name with a quote produces a valid script, not a broken one."""
+    scripts = []
+
+    def make_script(source, *_args, **_kwargs):
+        scripts.append(source)
+        mock = MagicMock()
+        mock.run.return_value = 0
+        return mock
+
+    with (
+        patch(
+            "shuffleupagus.services.appleMusic.service.applescript.AppleScript",
+            side_effect=make_script,
+        ),
+        patch("shuffleupagus.services.appleMusic.service.time.sleep"),
+    ):
+        svc._AppleMusicService__clear_playlist('My "Best" Mix')
+
+    assert scripts, "no AppleScript was built"
+    for source in scripts:
+        assert 'playlist "My \\"Best\\" Mix"' in source
+        # The raw, unescaped form must not appear — that is the broken script.
+        assert 'playlist "My "Best" Mix"' not in source
