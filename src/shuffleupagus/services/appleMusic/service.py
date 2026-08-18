@@ -30,6 +30,19 @@ def _applescript_str(value: str) -> str:
     return value.replace("\\", "\\\\").replace('"', '\\"')
 
 
+def _applescript_count(result: object) -> int:
+    """Coerce an AppleScript track count to int.
+
+    AppleScript results are untyped at this boundary — a script that errors, or
+    that Music.app answers unexpectedly, hands back a dict or None instead of a
+    number. Reject that with the actual value named, rather than letting int()
+    raise on its own and say nothing about where the value came from.
+    """
+    if isinstance(result, bool) or not isinstance(result, int | float):
+        raise TypeError(f"AppleScript returned a non-numeric track count: {result!r}")
+    return int(result)
+
+
 class AppleMusicService(Service):
     name = "appleMusic"
 
@@ -361,10 +374,10 @@ class AppleMusicService(Service):
             end tell
         """
         )
-        count = int(count_scpt.run())
+        count = _applescript_count(count_scpt.run())
         while count > 0:
             time.sleep(2)
-            count = int(count_scpt.run())
+            count = _applescript_count(count_scpt.run())
             logger.info(f"{self.tag}    * {count} track(s) remaining...")
 
     def __post_batch(self, playlist_id: str, track_ids: list[str]) -> None:
@@ -483,8 +496,11 @@ class AppleMusicService(Service):
                     break
                 logger.info(f"{self.tag}    * cloud still has {cloud_count} tracks ({(i + 1) * 10}s elapsed)")
             else:
+                # range(30) is never empty, so the loop body always binds
+                # cloud_count before this else branch runs. Pyright cannot prove
+                # a range is non-empty.
                 raise RuntimeError(
-                    f"Cloud still reports {cloud_count} tracks after 5 minutes — aborting to avoid duplicates"
+                    f"Cloud still reports {cloud_count} tracks after 5 minutes — aborting to avoid duplicates"  # pyright: ignore[reportPossiblyUnboundVariable]
                 )
 
         logger.info(f"{self.tag}  * publishing {len(tracks)} songs to the playlist")

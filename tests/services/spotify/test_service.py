@@ -542,7 +542,7 @@ def test_close_saves_cache(svc):
 def test_get_artist_none_id_raises(svc):
     """Artist object with None id raises ValueError."""
     # Deliberately invalid: exercises the runtime guard, so the type error is the point.
-    obj = Artist(None, "Name")  # ty: ignore[invalid-argument-type]
+    obj = Artist(None, "Name")  # ty: ignore[invalid-argument-type]  # pyright: ignore[reportArgumentType]
     with pytest.raises(ValueError, match="Artist ID is missing"):
         svc.get_artist(obj)
 

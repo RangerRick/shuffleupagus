@@ -80,5 +80,6 @@ def test_track_from_dict_with_album_and_artists():
     alb = Album("alb1", "A")
     art = Artist("art1", "X")
     t = AppleMusicTrack.from_dict(_track_obj(), album=alb, artists=[art])
+    assert t.album is not None
     assert t.album.id == "alb1"
     assert t.artists[0].name == "X"

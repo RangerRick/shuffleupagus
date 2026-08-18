@@ -7,7 +7,11 @@ import pytest
 import requests
 
 from shuffleupagus.core.cache import Cache
-from shuffleupagus.services.appleMusic.service import AppleMusicService, _applescript_str
+from shuffleupagus.services.appleMusic.service import (
+    AppleMusicService,
+    _applescript_count,
+    _applescript_str,
+)
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -794,6 +798,17 @@ def test_applescript_str_leaves_plain_text_alone():
 def test_applescript_str_rejects_line_breaks(bad):
     with pytest.raises(ValueError, match="line break"):
         _applescript_str(bad)
+
+
+@pytest.mark.parametrize("raw, expected", [(7, 7), (7.0, 7), (0, 0)])
+def test_applescript_count_accepts_numeric_results(raw, expected):
+    assert _applescript_count(raw) == expected
+
+
+@pytest.mark.parametrize("bad", [None, {"count": 3}, [1, 2], "7", True])
+def test_applescript_count_rejects_non_numeric_results(bad):
+    with pytest.raises(TypeError, match="track count"):
+        _applescript_count(bad)
 
 
 def test_clear_playlist_escapes_quoted_name(svc):

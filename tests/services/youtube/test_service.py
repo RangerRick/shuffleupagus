@@ -1036,7 +1036,7 @@ def test_get_artist_with_artist_object_handle_attr(svc):
 
 def test_get_artist_with_artist_object_none_id_raises(svc):
     # Deliberately invalid: exercises the runtime guard, so the type error is the point.
-    artist_obj = Artist(None, "Bad")  # ty: ignore[invalid-argument-type]
+    artist_obj = Artist(None, "Bad")  # ty: ignore[invalid-argument-type]  # pyright: ignore[reportArgumentType]
     with pytest.raises(ValueError, match="Artist ID is missing"):
         svc.get_artist(artist_obj)
 
