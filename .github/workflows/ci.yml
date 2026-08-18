@@ -31,9 +31,9 @@ jobs:
         with:
           enable-cache: true
       - run: uv sync --all-groups
-      - run: uv run ruff check src/ tests/
-      - run: uv run ruff format --check src/ tests/
-      - run: uv run ty check src/ tests/
+      - run: uv run ruff check src/ tests/ scripts/
+      - run: uv run ruff format --check src/ tests/ scripts/
+      - run: uv run ty check src/ tests/ scripts/
 
   test:
     name: tests and coverage
@@ -51,7 +51,7 @@ jobs:
         run: uv run pytest --cov-report=json:coverage.json
       # Per-module floors, which the aggregate number can hide.
       - name: per-module coverage floors
-        run: bash scripts/check_per_module_coverage.sh coverage.json
+        run: uv run python3 scripts/check_per_module_coverage.py coverage.json
 
   smoke:
     name: smoke test
