@@ -45,13 +45,17 @@ def svc(tmp_path, monkeypatch):
     config_mock = MagicMock()
     config_mock.service.return_value = {"cache-ttl-days": None}
     svc = SpotifyService.__new__(SpotifyService)
-    svc.cache = Cache("spotify")
+    cache = Cache("spotify")
+    svc.cache = cache
     svc.config = {}
     svc.spotify = MagicMock()
     svc._api_lock = threading.Lock()
     svc._rate_limited = None
     svc.tag = "[spotify] "
-    return svc
+    yield svc
+    # Close the cache this fixture built, not svc.cache — a test may have swapped
+    # svc.cache for a mock, which would orphan the real sqlite connection.
+    cache.close()
 
 
 # ---------------------------------------------------------------------------

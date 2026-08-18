@@ -46,13 +46,17 @@ def _track_response(id="t1", name="Track", duration_ms=180_000, isrc="USRC000000
 def svc(tmp_path, monkeypatch):
     monkeypatch.setattr(Cache, "_db_path", lambda self: str(tmp_path / f"{self.name}.db"))
     s = AppleMusicService.__new__(AppleMusicService)
-    s.cache = Cache("appleMusic")
+    cache = Cache("appleMusic")
+    s.cache = cache
     s.config = {"media-user-token": "tok"}
     s.client = MagicMock()
     s.client.proxies = {}
     s.client.session_length = 30
     s.tag = "[apple] "
-    return s
+    yield s
+    # Close the cache this fixture built, not s.cache — a test may have swapped
+    # s.cache for a mock, which would orphan the real sqlite connection.
+    cache.close()
 
 
 # ---------------------------------------------------------------------------

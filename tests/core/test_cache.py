@@ -10,7 +10,8 @@ from shuffleupagus.core.cache import CACHE_DEFAULT_CUTOFF, Cache
 @pytest.fixture
 def cache(tmp_path, monkeypatch):
     monkeypatch.setattr(Cache, "_db_path", lambda self: str(tmp_path / f"{self.name}.db"))
-    return Cache("test", cutoff=CACHE_DEFAULT_CUTOFF)
+    with Cache("test", cutoff=CACHE_DEFAULT_CUTOFF) as c:
+        yield c
 
 
 def _inject_stale(cache, key, value, ttl, age):
@@ -26,6 +27,24 @@ def _inject_stale(cache, key, value, ttl, age):
 def test_write_and_read(cache):
     cache.write("key1", {"data": 42})
     assert cache.read("key1") == {"data": 42}
+
+
+def test_context_manager_returns_cache_and_closes(tmp_path, monkeypatch):
+    monkeypatch.setattr(Cache, "_db_path", lambda self: str(tmp_path / f"{self.name}.db"))
+    with Cache("ctx") as c:
+        assert isinstance(c, Cache)
+        c.write("key", "value")
+        assert c.read("key") == "value"
+    with pytest.raises(sqlite3.ProgrammingError):
+        c.read("key")
+
+
+def test_context_manager_closes_on_exception(tmp_path, monkeypatch):
+    monkeypatch.setattr(Cache, "_db_path", lambda self: str(tmp_path / f"{self.name}.db"))
+    with pytest.raises(ValueError), Cache("ctx_err") as c:
+        raise ValueError("boom")
+    with pytest.raises(sqlite3.ProgrammingError):
+        c.read("key")
 
 
 def test_read_missing_returns_none(cache):
@@ -82,16 +101,15 @@ def test_write_custom_ttl(cache):
 
 def test_clean_evicts_expired(tmp_path, monkeypatch):
     monkeypatch.setattr(Cache, "_db_path", lambda self: str(tmp_path / "t.db"))
-    c = Cache("test", cutoff=60.0)
+    with Cache("test", cutoff=60.0) as c:
+        _inject_stale(c, "old", "stale_value", ttl=60.0, age=3600)
+        c.write("fresh", "fresh_value", ttl=60.0)
 
-    _inject_stale(c, "old", "stale_value", ttl=60.0, age=3600)
-    c.write("fresh", "fresh_value", ttl=60.0)
+        evicted = c._clean()
 
-    evicted = c._clean()
-
-    assert evicted == 1
-    assert c.read("old") is None
-    assert c.read("fresh") == "fresh_value"
+        assert evicted == 1
+        assert c.read("old") is None
+        assert c.read("fresh") == "fresh_value"
 
 
 def test_clean_keeps_fresh_entries(cache):
@@ -107,12 +125,12 @@ def test_save_and_load(tmp_path, monkeypatch):
     db_path = str(tmp_path / "svc.db")
     monkeypatch.setattr(Cache, "_db_path", lambda self: db_path)
 
-    c1 = Cache("svc")
-    c1.write("hello", "world")
-    c1.save()
+    with Cache("svc") as c1:
+        c1.write("hello", "world")
+        c1.save()
 
-    c2 = Cache("svc")
-    assert c2.read("hello") == "world"
+    with Cache("svc") as c2:
+        assert c2.read("hello") == "world"
 
 
 # ---------------------------------------------------------------------------
@@ -155,33 +173,33 @@ def test_concurrent_write_and_save(tmp_path, monkeypatch):
     """Concurrent writes during save() produce no corruption."""
     db_path = str(tmp_path / "concurrent.db")
     monkeypatch.setattr(Cache, "_db_path", lambda self: db_path)
-    c = Cache("concurrent")
-    errors: list[Exception] = []
+    with Cache("concurrent") as c:
+        errors: list[Exception] = []
 
-    def writer(thread_id):
-        try:
-            for i in range(OPS_PER_THREAD):
-                c.write(f"t{thread_id}-k{i}", i)
-        except Exception as exc:
-            errors.append(exc)
+        def writer(thread_id):
+            try:
+                for i in range(OPS_PER_THREAD):
+                    c.write(f"t{thread_id}-k{i}", i)
+            except Exception as exc:
+                errors.append(exc)
 
-    def saver():
-        try:
-            for _ in range(20):
-                c.save()
-        except Exception as exc:
-            errors.append(exc)
+        def saver():
+            try:
+                for _ in range(20):
+                    c.save()
+            except Exception as exc:
+                errors.append(exc)
 
-    threads = [threading.Thread(target=writer, args=(t,)) for t in range(NUM_THREADS)]
-    threads.append(threading.Thread(target=saver))
-    for t in threads:
-        t.start()
-    for t in threads:
-        t.join(timeout=10)
+        threads = [threading.Thread(target=writer, args=(t,)) for t in range(NUM_THREADS)]
+        threads.append(threading.Thread(target=saver))
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join(timeout=10)
 
-    alive = [t for t in threads if t.is_alive()]
-    assert not alive, "Deadlock detected: threads still alive after timeout"
-    assert not errors, f"Concurrent write+save raised: {errors}"
+        alive = [t for t in threads if t.is_alive()]
+        assert not alive, "Deadlock detected: threads still alive after timeout"
+        assert not errors, f"Concurrent write+save raised: {errors}"
 
 
 def test_close_releases_connection(cache):

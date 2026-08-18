@@ -23,11 +23,15 @@ from shuffleupagus.services.youtube.service import YoutubeService
 def svc(tmp_path, monkeypatch):
     monkeypatch.setattr(Cache, "_db_path", lambda self: str(tmp_path / f"{self.name}.db"))
     s = YoutubeService.__new__(YoutubeService)
-    s.cache = Cache("youtube")
+    cache = Cache("youtube")
+    s.cache = cache
     s.config = {}
     s.client = MagicMock()
     s.tag = "[youtube] "
-    return s
+    yield s
+    # Close the cache this fixture built, not s.cache — a test may have swapped
+    # s.cache for a mock, which would orphan the real sqlite connection.
+    cache.close()
 
 
 def _mock_token(value: str = "test-token") -> MagicMock:
@@ -409,10 +413,12 @@ def browser_svc(tmp_path, monkeypatch):
     """YoutubeService wired for browser-cookie auth (no client_id/secret)."""
     monkeypatch.setattr(Cache, "_db_path", lambda self: str(tmp_path / f"{self.name}.db"))
     s = YoutubeService.__new__(YoutubeService)
-    s.cache = Cache("youtube")
+    cache = Cache("youtube")
+    s.cache = cache
     s.config = {"auth-file": str(tmp_path / "browser_auth.json")}
     s.tag = "[youtube] "
-    return s, tmp_path
+    yield s, tmp_path
+    cache.close()
 
 
 def _valid_browse_response():

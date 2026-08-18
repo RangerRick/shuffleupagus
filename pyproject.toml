@@ -115,6 +115,7 @@ error-on-warning = true
 addopts = "--cov=src --cov-report=term-missing"
 testpaths = ["tests"]
 pythonpath = ["src"]
+filterwarnings = ["error"]
 
 [tool.coverage.run]
 omit = ["src/shuffleupagus/shuffleupagus.py"]
