@@ -56,6 +56,7 @@ class YoutubeService(Service):
         return base.with_stem(base.stem + "_browser")
 
     _MAX_AUTH_ATTEMPTS = 3
+    _MAX_VERIFY_ROUNDS = 3
 
     def preflight(self):
         browser_file = self._browser_auth_file()
@@ -495,22 +496,62 @@ class YoutubeService(Service):
                 break
         raise ValueError(f"Playlist not found: {playlist_name}")
 
-    def sync(self, playlist_name: str, tracks: list[str] | None = None):
-        playlist_id = self.get_playlist_id_for_name(playlist_name)
-
-        # Fetch existing playlist items via Data API v3
-        existing_item_ids: list[str] = []
+    def __get_playlist_items(self, playlist_id: str, part: str) -> list[dict]:
+        """Read every playlistItems entry for a playlist, following pagination."""
+        items: list[dict] = []
         page_token = None
         while True:
-            params: dict = {"part": "id", "playlistId": playlist_id, "maxResults": 50}
+            params: dict = {"part": part, "playlistId": playlist_id, "maxResults": 50}
             if page_token:
                 params["pageToken"] = page_token
             data = self._data_api_get("https://www.googleapis.com/youtube/v3/playlistItems", params)
-            existing_item_ids.extend(item["id"] for item in data.get("items", []))
+            items.extend(data.get("items", []))
             page_token = data.get("nextPageToken")
             if not page_token:
                 break
+        return items
 
+    def __add_video(self, playlist_id: str, video_id: str) -> None:
+        self._data_api_post(
+            "https://www.googleapis.com/youtube/v3/playlistItems",
+            params={"part": "snippet"},
+            body={
+                "snippet": {
+                    "playlistId": playlist_id,
+                    "resourceId": {"kind": "youtube#video", "videoId": video_id},
+                }
+            },
+        )
+
+    def __verify_playlist(self, playlist_id: str, expected_ids: list[str]) -> None:
+        """Confirm every video reached the playlist, re-adding any that did not."""
+        expected = set(expected_ids)
+        for round_num in range(self._MAX_VERIFY_ROUNDS + 1):
+            actual = {
+                item["contentDetails"]["videoId"]
+                for item in self.__get_playlist_items(playlist_id, "contentDetails")
+                if item.get("contentDetails", {}).get("videoId")
+            }
+            missing = expected - actual
+            if not missing:
+                logger.info(f"{self.tag}  * verified {len(expected)} tracks in playlist")
+                return
+            if round_num == self._MAX_VERIFY_ROUNDS:
+                raise RuntimeError(
+                    f"{len(missing)} tracks could not be verified in the YouTube playlist "
+                    f"after {self._MAX_VERIFY_ROUNDS} re-add rounds: {sorted(missing)}"
+                )
+            logger.warning(
+                f"{self.tag}  ! {len(missing)} tracks missing after sync, "
+                f"re-adding (round {round_num + 1}/{self._MAX_VERIFY_ROUNDS})"
+            )
+            for video_id in sorted(missing):
+                self.__add_video(playlist_id, video_id)
+
+    def sync(self, playlist_name: str, tracks: list[str] | None = None):
+        playlist_id = self.get_playlist_id_for_name(playlist_name)
+
+        existing_item_ids = [item["id"] for item in self.__get_playlist_items(playlist_id, "id")]
         logger.debug(f"{self.tag}  * removing {len(existing_item_ids)} existing items from playlist")
         for item_id in existing_item_ids:
             self._data_api_delete(
@@ -518,15 +559,10 @@ class YoutubeService(Service):
                 params={"id": item_id},
             )
 
-        logger.debug(f"{self.tag}  * adding {len(tracks or [])} new items to playlist")
-        for video_id in tracks or []:
-            self._data_api_post(
-                "https://www.googleapis.com/youtube/v3/playlistItems",
-                params={"part": "snippet"},
-                body={
-                    "snippet": {
-                        "playlistId": playlist_id,
-                        "resourceId": {"kind": "youtube#video", "videoId": video_id},
-                    }
-                },
-            )
+        expected_ids = list(tracks or [])
+        logger.debug(f"{self.tag}  * adding {len(expected_ids)} new items to playlist")
+        for video_id in expected_ids:
+            self.__add_video(playlist_id, video_id)
+
+        if expected_ids:
+            self.__verify_playlist(playlist_id, expected_ids)

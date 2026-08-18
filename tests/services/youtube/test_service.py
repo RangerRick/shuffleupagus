@@ -343,9 +343,20 @@ def test_get_playlist_id_paginates(svc):
     assert svc.get_playlist_id_for_name("Target") == "pl2"
 
 
+def _mock_playlist_api(svc, existing_item_ids, verified_video_ids):
+    """Mock _data_api_get: the 'id' read lists items, 'contentDetails' lists video IDs."""
+
+    def _get(_url, params):
+        if params.get("part") == "contentDetails":
+            return {"items": [{"contentDetails": {"videoId": v}} for v in verified_video_ids]}
+        return {"items": [{"id": i} for i in existing_item_ids]}
+
+    svc._data_api_get = MagicMock(side_effect=_get)
+
+
 def test_sync_deletes_and_inserts(svc):
     svc.get_playlist_id_for_name = MagicMock(return_value="pl1")
-    svc._data_api_get = MagicMock(return_value={"items": [{"id": "item1"}, {"id": "item2"}]})
+    _mock_playlist_api(svc, ["item1", "item2"], ["vid1", "vid2", "vid3"])
     svc._data_api_delete = MagicMock()
     svc._data_api_post = MagicMock()
 
@@ -353,6 +364,38 @@ def test_sync_deletes_and_inserts(svc):
 
     assert svc._data_api_delete.call_count == 2
     assert svc._data_api_post.call_count == 3
+
+
+def test_sync_readds_missing_videos(svc):
+    """A video absent from the read-back is re-added, then verification passes."""
+    svc.get_playlist_id_for_name = MagicMock(return_value="pl1")
+    reads = [["vid1"], ["vid1", "vid2"]]
+
+    def _get(_url, params):
+        if params.get("part") == "contentDetails":
+            page = reads[0] if len(reads) == 1 else reads.pop(0)
+            return {"items": [{"contentDetails": {"videoId": v}} for v in page]}
+        return {"items": []}
+
+    svc._data_api_get = MagicMock(side_effect=_get)
+    svc._data_api_delete = MagicMock()
+    svc._data_api_post = MagicMock()
+
+    svc.sync("Playlist", ["vid1", "vid2"])
+
+    # 2 initial inserts + 1 re-add of the missing vid2
+    assert svc._data_api_post.call_count == 3
+
+
+def test_sync_raises_when_videos_never_verify(svc):
+    """A video the API never persists raises instead of retrying forever."""
+    svc.get_playlist_id_for_name = MagicMock(return_value="pl1")
+    _mock_playlist_api(svc, [], ["vid1"])
+    svc._data_api_delete = MagicMock()
+    svc._data_api_post = MagicMock()
+
+    with pytest.raises(RuntimeError, match="could not be verified"):
+        svc.sync("Playlist", ["vid1", "vid2"])
 
 
 # ---------------------------------------------------------------------------
@@ -935,7 +978,8 @@ def test_get_artist_with_artist_object_handle_attr(svc):
 
 
 def test_get_artist_with_artist_object_none_id_raises(svc):
-    artist_obj = Artist(None, "Bad")
+    # Deliberately invalid: exercises the runtime guard, so the type error is the point.
+    artist_obj = Artist(None, "Bad")  # ty: ignore[invalid-argument-type]
     with pytest.raises(ValueError, match="Artist ID is missing"):
         svc.get_artist(artist_obj)
 
@@ -1156,17 +1200,15 @@ def test_get_artist_top_tracks_returns_empty(svc):
 
 def test_sync_paginates_existing_items(svc):
     svc.get_playlist_id_for_name = MagicMock(return_value="pl1")
-    svc._data_api_get = MagicMock(
-        side_effect=[
-            {
-                "items": [{"id": "item1"}],
-                "nextPageToken": "page2",
-            },
-            {
-                "items": [{"id": "item2"}],
-            },
-        ]
-    )
+
+    def _get(_url, params):
+        if params.get("part") == "contentDetails":
+            return {"items": [{"contentDetails": {"videoId": "vid1"}}]}
+        if params.get("pageToken") == "page2":
+            return {"items": [{"id": "item2"}]}
+        return {"items": [{"id": "item1"}], "nextPageToken": "page2"}
+
+    svc._data_api_get = MagicMock(side_effect=_get)
     svc._data_api_delete = MagicMock()
     svc._data_api_post = MagicMock()
     svc.sync("Playlist", ["vid1"])
