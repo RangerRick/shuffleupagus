@@ -209,7 +209,16 @@ class YoutubeService(Service):
     def _check_api_response(self, resp: requests.Response) -> None:
         """Raise RuntimeError with details for YouTube API errors."""
         if resp.status_code in (403, 429):
-            body = resp.json() if resp.content else {}
+            # An error body is not guaranteed to be JSON — a proxy or gateway can
+            # answer with HTML, and a truncated response fails to parse. Treat any
+            # parse failure as an empty body so the status/resp.text path below
+            # still reports the real HTTP failure instead of a JSONDecodeError.
+            try:
+                body = resp.json() if resp.content else {}
+            except ValueError:
+                body = {}
+            if not isinstance(body, dict):
+                body = {}
             reason = ""
             for err in body.get("error", {}).get("errors", []):
                 reason = err.get("reason", "")

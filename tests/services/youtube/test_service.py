@@ -770,6 +770,28 @@ def test_check_api_response_403_empty_body(svc):
         svc._check_api_response(resp)
 
 
+def test_check_api_response_non_json_body(svc):
+    """An HTML or truncated error body still reports the real HTTP failure."""
+    resp = MagicMock()
+    resp.status_code = 403
+    resp.content = b"<html><body>Forbidden by proxy</body></html>"
+    resp.text = "<html><body>Forbidden by proxy</body></html>"
+    resp.json.side_effect = ValueError("Expecting value: line 1 column 1 (char 0)")
+    with pytest.raises(RuntimeError, match="403"):
+        svc._check_api_response(resp)
+
+
+def test_check_api_response_json_body_not_an_object(svc):
+    """A JSON body that decodes to a non-object does not crash the error path."""
+    resp = MagicMock()
+    resp.status_code = 429
+    resp.content = b'"rate limited"'
+    resp.text = "rate limited"
+    resp.json.return_value = "rate limited"
+    with pytest.raises(RuntimeError, match="429"):
+        svc._check_api_response(resp)
+
+
 def test_check_api_response_ok_passes(svc):
     resp = MagicMock()
     resp.status_code = 200
