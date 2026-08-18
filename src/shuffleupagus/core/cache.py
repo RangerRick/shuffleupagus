@@ -11,7 +11,7 @@ class Cache:
     name: str
     cutoff: float
 
-    def __init__(self, name: str, cutoff: float = CACHE_DEFAULT_CUTOFF, **_kwargs):
+    def __init__(self, name: str, cutoff: float = CACHE_DEFAULT_CUTOFF):
         self.name = name
         self.cutoff = cutoff
         self._lock = threading.Lock()

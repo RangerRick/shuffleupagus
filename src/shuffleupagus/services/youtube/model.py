@@ -2,6 +2,13 @@ from ...core import model
 
 
 def sanitize_id(id: str) -> str:
+    """Strip a URL wrapper or a "youtube:"/"artist:"/"album:"/"track:" prefix off a model ID.
+
+    Not the same as YoutubeService.sanitize_id(), which resolves channel URLs
+    and @handles from user config. This one normalizes IDs already inside the
+    model layer, and matches the equivalent helpers in the Spotify and Apple
+    Music model modules.
+    """
     if id.startswith(("http://", "https://")):
         id = id.rsplit("/", maxsplit=1)[-1]
         id = id.split("?")[0]

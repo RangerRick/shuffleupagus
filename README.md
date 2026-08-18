@@ -95,6 +95,15 @@ shuffleupagus
 - By default, the script runs in test mode and will update the test playlist(s) specified in your config.
 - Use `--dry-run` to do everything but publish to services.
 - Use `--production` to publish to your production playlist rather than the test one.
+- Use `--only-services spotify,youtube` to run a subset of the configured services.
+- Use `--log-level DEBUG` for more detail.
+
+### Environment variables
+
+| Variable | Effect |
+|---|---|
+| `NERD_FONTS` | Set to `1`, `true`, or `yes` to prefix log lines with Nerd Font brand icons instead of `[spotify]`-style text tags. Requires a patched font. |
+| `YTMUSIC_HEADERS_RAW` | Raw YouTube Music request headers, used instead of the interactive browser-cookie prompt. Useful when pasting into the terminal stalls. |
 
 ## Configuration
 

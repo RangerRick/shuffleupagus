@@ -251,6 +251,14 @@ class YoutubeService(Service):
         self._check_api_response(resp)
 
     def sanitize_id(self, id: str) -> str:
+        """Normalize a user-supplied YouTube reference to a bare ID or @handle.
+
+        Deliberately NOT the same as youtube.model.sanitize_id(), which strips
+        the "youtube:"/"artist:"/"album:"/"track:" prefixes carried by cached
+        model IDs. This one understands youtube.com URLs and @handles, which is
+        what users actually paste into the config. Editing one does not change
+        the other — pick the one matching the input you have.
+        """
         if id.startswith(("http://", "https://", "youtube.com", "www.youtube.com")):
             url = id.removeprefix("https://").removeprefix("http://").removeprefix("www.")
             if url.startswith("youtube.com/@"):
