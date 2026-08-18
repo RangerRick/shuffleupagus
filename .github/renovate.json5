@@ -8,7 +8,6 @@
   ],
 
   // General settings
-  "assigneesFromCodeOwners": true,
   "baseBranchPatterns": ["main"],
   "branchConcurrentLimit": 5,
   "internalChecksFilter": "strict",
