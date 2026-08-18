@@ -1,4 +1,4 @@
-.PHONY: dev lint format test build
+.PHONY: dev lint format test coverage build smoke
 
 dev:
 	uv sync --all-groups
@@ -14,5 +14,12 @@ format:
 test:
 	uv run pytest
 
+coverage:
+	uv run pytest --cov-report=json:coverage.json
+	bash scripts/check_per_module_coverage.sh coverage.json
+
 build:
 	uv build
+
+smoke:
+	bash scripts/smoke_test.sh
