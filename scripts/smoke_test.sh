@@ -27,7 +27,7 @@ WHEEL="$(ls dist/*.whl)"
 echo "    $WHEEL"
 
 echo "==> installing into a clean prefix"
-uv venv "$WORK_DIR/venv" >/dev/null 2>&1
+uv venv "$WORK_DIR/venv" >/dev/null
 VENV_BIN="$WORK_DIR/venv/bin"
 VIRTUAL_ENV="$WORK_DIR/venv" uv pip install --quiet "$WHEEL"
 
@@ -50,11 +50,18 @@ grep -q -- "--dry-run" "$WORK_DIR/help.txt" || {
 #    the config-load path failing for the expected reason rather than an
 #    ImportError or an argparse error wearing its clothes.
 echo "==> missing config is reported clearly"
-if HOME="$FAKE_HOME" "$CMD" --dry-run >"$WORK_DIR/noconfig.txt" 2>&1; then
-	echo "FAIL: expected a non-zero exit with no config present" >&2
+set +e
+HOME="$FAKE_HOME" "$CMD" --dry-run >"$WORK_DIR/noconfig.txt" 2>&1
+rc=$?
+set -e
+# Exit 1 is the config load failing. Argparse exits 2, so the code separates a
+# real config error from a CLI that stopped before it ever read one.
+[[ $rc -eq 1 ]] || {
+	echo "FAIL: expected exit 1 from the config load, got $rc" >&2
+	cat "$WORK_DIR/noconfig.txt" >&2
 	exit 1
-fi
-grep -q "config.yaml" "$WORK_DIR/noconfig.txt" || {
+}
+grep -qE "Config file not found:.*config\\.yaml" "$WORK_DIR/noconfig.txt" || {
 	echo "FAIL: missing-config error did not name config.yaml" >&2
 	cat "$WORK_DIR/noconfig.txt" >&2
 	exit 1
@@ -70,9 +77,15 @@ HOME="$FAKE_HOME" "$CMD" --dry-run >"$WORK_DIR/dryrun.txt" 2>&1 || {
 	cat "$WORK_DIR/dryrun.txt" >&2
 	exit 1
 }
-# Proves the config was parsed and applied, not merely opened.
-grep -q "disabled in the configuration" "$WORK_DIR/dryrun.txt" || {
-	echo "FAIL: --dry-run did not report the example services as disabled" >&2
+# Proves the config was parsed and applied, not merely opened. Counted, not
+# just present: this run's "no network" property holds only while EVERY
+# discovered service is disabled, and a service absent from the config defaults
+# to enabled.
+expected="$(find "$REPO_ROOT/src/shuffleupagus/services" -mindepth 1 -maxdepth 1 -type d \
+	-not -name '__pycache__' | wc -l | tr -d ' ')"
+actual="$(grep -c "disabled in the configuration" "$WORK_DIR/dryrun.txt" || true)"
+[[ "$actual" -eq "$expected" ]] || {
+	echo "FAIL: expected $expected services reported disabled, saw $actual" >&2
 	cat "$WORK_DIR/dryrun.txt" >&2
 	exit 1
 }

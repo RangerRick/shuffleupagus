@@ -13,7 +13,7 @@ permissions:
 # A new push to the same PR supersedes the run in flight.
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
   # uv reads this to pick the interpreter, matching .python-version.
@@ -23,6 +23,7 @@ jobs:
   validate:
     name: lint and types
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -38,6 +39,7 @@ jobs:
   test:
     name: tests and coverage
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -56,6 +58,7 @@ jobs:
   smoke:
     name: smoke test
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -71,6 +74,7 @@ jobs:
   workflows:
     name: workflow audit
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -78,15 +82,19 @@ jobs:
       - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
         with:
           enable-cache: true
-      # --offline keeps this from needing a token and from failing on GitHub API
-      # rate limits. It costs the checks that resolve action repos over the
-      # network; the SHA pins above are what those would mostly be checking.
+      # Runs online, using the job's own read-only token, so the audits that
+      # resolve action repos still work — known-vulnerable-actions and
+      # stale-action-refs are the point of auditing a file full of SHA pins.
+      # Version-pinned so the ruleset changes in a commit, not on its own.
       - name: zizmor
-        run: uvx zizmor --offline --format plain .github/workflows/
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: uvx zizmor@1.29.0 --format plain .github/workflows/
 
   shell:
     name: shell scripts
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
