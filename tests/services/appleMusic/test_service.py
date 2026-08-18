@@ -1,14 +1,18 @@
 """Tests for AppleMusicService with all network/applescript calls mocked."""
+
+import time
 from unittest.mock import MagicMock, patch
 
 import pytest
+import requests
 
 from shuffleupagus.core.cache import Cache
-from shuffleupagus.services.appleMusic.service import AppleMusicService
+from shuffleupagus.services.appleMusic.service import AppleMusicService, _applescript_str
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 def _artist_response(id="a1", name="Artist"):
     return {"data": [{"id": id, "attributes": {"name": name}}]}
@@ -37,23 +41,24 @@ def _track_response(id="t1", name="Track", duration_ms=180_000, isrc="USRC000000
 # Fixture
 # ---------------------------------------------------------------------------
 
+
 @pytest.fixture
 def svc(tmp_path, monkeypatch):
-    monkeypatch.setattr(
-        Cache, "_filename", lambda self: str(tmp_path / f"{self.name}.joblib.gz")
-    )
+    monkeypatch.setattr(Cache, "_db_path", lambda self: str(tmp_path / f"{self.name}.db"))
     s = AppleMusicService.__new__(AppleMusicService)
-    s.cache = Cache("appleMusic", autosave=False)
+    s.cache = Cache("appleMusic")
     s.config = {"media-user-token": "tok"}
     s.client = MagicMock()
     s.client.proxies = {}
     s.client.session_length = 30
+    s.tag = "[apple] "
     return s
 
 
 # ---------------------------------------------------------------------------
 # get_artist
 # ---------------------------------------------------------------------------
+
 
 def test_get_artist_cache_miss(svc):
     svc.client.artist.return_value = _artist_response("a1", "My Artist")
@@ -72,6 +77,7 @@ def test_get_artist_cache_hit(svc):
 
 def test_get_artist_from_artist_object(svc):
     from shuffleupagus.core.model import Artist
+
     obj = Artist("a1", "Existing")
     svc.cache.write("artist:a1", _artist_response("a1", "Existing"))
     artist = svc.get_artist(obj)
@@ -91,9 +97,103 @@ def test_get_artist_empty_data_returns_none(svc):
     assert artist is None
 
 
+def test_get_artist_sanitizes_url_id(svc):
+    """A raw music.apple.com URL is sanitized before reaching the API client."""
+    svc.client.artist.return_value = _artist_response("123456", "My Artist")
+    artist = svc.get_artist("https://music.apple.com/us/artist/my-artist/123456")
+    assert artist.id == "123456"
+    svc.client.artist.assert_called_once_with("123456")
+
+
+# ---------------------------------------------------------------------------
+# fatal (auth/rate-limit) errors abort the run instead of being swallowed
+# ---------------------------------------------------------------------------
+
+
+def _http_error(status_code, headers=None):
+    """Build the HTTPError applemusicpy raises once its own retries are exhausted."""
+    resp = MagicMock()
+    resp.status_code = status_code
+    # A real dict, not a MagicMock: int(MagicMock()) is 1, which would silently
+    # fake a Retry-After of one second on every 429 test.
+    resp.headers = {} if headers is None else headers
+    return requests.exceptions.HTTPError(f"HTTP {status_code}", response=resp)
+
+
+@pytest.mark.parametrize("status_code", [401, 403])
+def test_get_artist_auth_error_raises(svc, status_code):
+    svc.client.artist.side_effect = _http_error(status_code)
+    with pytest.raises(RuntimeError, match=str(status_code)):
+        svc.get_artist("a1")
+
+
+def test_get_artist_rate_limit_raises(svc):
+    svc.client.artist.side_effect = _http_error(429)
+    with pytest.raises(RuntimeError, match="rate-limited"):
+        svc.get_artist("a1")
+
+
+def test_get_album_by_id_fatal_error_raises(svc):
+    svc.client.album.side_effect = _http_error(429)
+    with pytest.raises(RuntimeError, match="rate-limited"):
+        svc.get_album_by_id("alb1")
+
+
+def test_get_artist_albums_fatal_error_raises(svc):
+    from shuffleupagus.core.model import Artist
+
+    svc.client.artist_relationship.side_effect = _http_error(429)
+    with pytest.raises(RuntimeError, match="rate-limited"):
+        svc.get_artist_albums(Artist("a1", "A"))
+
+
+def test_get_album_tracks_fatal_error_raises(svc):
+    from shuffleupagus.core.model import Album
+
+    svc.client.album_relationship.side_effect = _http_error(429)
+    with pytest.raises(RuntimeError, match="rate-limited"):
+        svc.get_album_tracks(Album("alb1", "A"))
+
+
+def test_get_artist_top_tracks_fatal_error_raises(svc):
+    from shuffleupagus.core.model import Artist
+
+    svc.client.artist_relationship_view.side_effect = _http_error(429)
+    with pytest.raises(RuntimeError, match="rate-limited"):
+        svc.get_artist_top_tracks(Artist("a1", "A"))
+
+
+def test_rate_limit_honours_retry_after(svc):
+    """A Retry-After header is turned into a countdown and a cached window."""
+    from shuffleupagus.core.model import Service
+
+    svc.client.artist.side_effect = _http_error(429, {"Retry-After": "3661"})
+    with pytest.raises(RuntimeError, match="1h 1m from now"):
+        svc.get_artist("a1")
+    assert svc.cache.read_stale(Service._RATE_LIMIT_CACHE_KEY) > time.time()
+
+
+def test_rate_limit_without_retry_after_does_not_cache(svc):
+    """Without Retry-After there is no known window, so nothing is persisted."""
+    from shuffleupagus.core.model import Service
+
+    svc.client.artist.side_effect = _http_error(429)
+    with pytest.raises(RuntimeError, match="no Retry-After header"):
+        svc.get_artist("a1")
+    assert svc.cache.read_stale(Service._RATE_LIMIT_CACHE_KEY) is None
+
+
+def test_rate_limit_ignores_garbage_retry_after(svc):
+    """A non-numeric Retry-After is treated as absent, not crashed on."""
+    svc.client.artist.side_effect = _http_error(429, {"Retry-After": "soon"})
+    with pytest.raises(RuntimeError, match="no Retry-After header"):
+        svc.get_artist("a1")
+
+
 # ---------------------------------------------------------------------------
 # get_album_by_id
 # ---------------------------------------------------------------------------
+
 
 def test_get_album_by_id_cache_miss(svc):
     svc.client.album.return_value = _album_response("alb1", "Test Album")
@@ -119,8 +219,10 @@ def test_get_album_by_id_error_returns_none(svc):
 # get_artist_albums
 # ---------------------------------------------------------------------------
 
+
 def test_get_artist_albums(svc):
     from shuffleupagus.core.model import Artist
+
     svc.client.artist_relationship.return_value = {
         "data": [
             {"id": "alb1", "attributes": {"name": "Album One", "releaseDate": "2021-01-01"}},
@@ -135,9 +237,10 @@ def test_get_artist_albums(svc):
 
 def test_get_artist_albums_cache_hit(svc):
     from shuffleupagus.core.model import Artist
-    svc.cache.write("artist:a1:albums", {
-        "data": [{"id": "alb1", "attributes": {"name": "Cached", "releaseDate": "2020-01-01"}}]
-    })
+
+    svc.cache.write(
+        "artist:a1:albums", {"data": [{"id": "alb1", "attributes": {"name": "Cached", "releaseDate": "2020-01-01"}}]}
+    )
     albums = svc.get_artist_albums(Artist("a1", "A"))
     assert len(albums) == 1
     svc.client.artist_relationship.assert_not_called()
@@ -145,6 +248,7 @@ def test_get_artist_albums_cache_hit(svc):
 
 def test_get_artist_albums_empty(svc):
     from shuffleupagus.core.model import Artist
+
     svc.client.artist_relationship.return_value = {"data": []}
     albums = svc.get_artist_albums(Artist("a1", "A"))
     assert albums == []
@@ -152,6 +256,7 @@ def test_get_artist_albums_empty(svc):
 
 def test_get_artist_albums_error_returns_empty(svc):
     from shuffleupagus.core.model import Artist
+
     svc.client.artist_relationship.side_effect = Exception("error")
     albums = svc.get_artist_albums(Artist("a1", "A"))
     assert albums == []
@@ -161,8 +266,10 @@ def test_get_artist_albums_error_returns_empty(svc):
 # get_album_tracks
 # ---------------------------------------------------------------------------
 
+
 def test_get_album_tracks(svc):
     from shuffleupagus.core.model import Album
+
     svc.client.album_relationship.return_value = {
         "data": [
             {"id": "t1", "attributes": {"name": "Track 1", "durationInMillis": 200_000, "isrc": "US001"}},
@@ -179,9 +286,11 @@ def test_get_album_tracks(svc):
 
 def test_get_album_tracks_cache_hit(svc):
     from shuffleupagus.core.model import Album
-    svc.cache.write("album:alb1:tracks", {
-        "data": [{"id": "t1", "attributes": {"name": "T", "durationInMillis": 100_000, "isrc": "US001"}}]
-    })
+
+    svc.cache.write(
+        "album:alb1:tracks",
+        {"data": [{"id": "t1", "attributes": {"name": "T", "durationInMillis": 100_000, "isrc": "US001"}}]},
+    )
     tracks = svc.get_album_tracks(Album("alb1", "A"))
     assert len(tracks) == 1
     svc.client.album_relationship.assert_not_called()
@@ -189,6 +298,7 @@ def test_get_album_tracks_cache_hit(svc):
 
 def test_get_album_tracks_empty(svc):
     from shuffleupagus.core.model import Album
+
     svc.client.album_relationship.return_value = {"data": []}
     tracks = svc.get_album_tracks(Album("alb1", "A"))
     assert tracks == []
@@ -196,6 +306,7 @@ def test_get_album_tracks_empty(svc):
 
 def test_get_album_tracks_with_artist(svc):
     from shuffleupagus.core.model import Album, Artist
+
     svc.client.album_relationship.return_value = {
         "data": [{"id": "t1", "attributes": {"name": "T", "durationInMillis": 100_000, "isrc": "US001"}}]
     }
@@ -206,14 +317,50 @@ def test_get_album_tracks_with_artist(svc):
 
 
 # ---------------------------------------------------------------------------
+# _get_track_by_id
+# ---------------------------------------------------------------------------
+
+
+def test_get_track_by_id_cache_miss(svc):
+    svc.client.song.return_value = _track_response("t1", "My Track")
+    track = svc._get_track_by_id("t1")
+    assert track.id == "t1"
+    assert track.name == "My Track"
+
+
+def test_get_track_by_id_sanitizes_id(svc):
+    svc.client.song.return_value = _track_response("t1", "My Track")
+    svc._get_track_by_id("https://music.apple.com/us/song/my-track/t1")
+    svc.client.song.assert_called_once_with("t1")
+
+
+def test_get_track_by_id_error_returns_none(svc):
+    svc.client.song.side_effect = Exception("network error")
+    track = svc._get_track_by_id("t1")
+    assert track is None
+
+
+def test_get_track_by_id_fatal_error_raises(svc):
+    svc.client.song.side_effect = _http_error(429)
+    with pytest.raises(RuntimeError, match="rate-limited"):
+        svc._get_track_by_id("t1")
+
+
+def test_get_track_by_id_empty_data_returns_none(svc):
+    svc.client.song.return_value = {"data": []}
+    track = svc._get_track_by_id("t1")
+    assert track is None
+
+
+# ---------------------------------------------------------------------------
 # get_artist_top_tracks
 # ---------------------------------------------------------------------------
 
+
 def test_get_artist_top_tracks(svc):
     from shuffleupagus.core.model import Artist
-    svc.client.artist_relationship_view.return_value = {
-        "data": [{"id": "t1"}, {"id": "t2"}]
-    }
+
+    svc.client.artist_relationship_view.return_value = {"data": [{"id": "t1"}, {"id": "t2"}]}
     svc.client.song.side_effect = [_track_response("t1", "Song 1"), _track_response("t2", "Song 2")]
     tracks = svc.get_artist_top_tracks(Artist("a1", "A"))
     assert len(tracks) == 2
@@ -222,6 +369,7 @@ def test_get_artist_top_tracks(svc):
 
 def test_get_artist_top_tracks_cache_hit(svc):
     from shuffleupagus.core.model import Artist
+
     svc.cache.write("top-tracks:a1", {"data": [{"id": "t1"}]})
     svc.client.song.return_value = _track_response("t1", "Cached Song")
     tracks = svc.get_artist_top_tracks(Artist("a1", "A"))
@@ -231,6 +379,7 @@ def test_get_artist_top_tracks_cache_hit(svc):
 
 def test_get_artist_top_tracks_empty(svc):
     from shuffleupagus.core.model import Artist
+
     svc.client.artist_relationship_view.return_value = {"data": []}
     tracks = svc.get_artist_top_tracks(Artist("a1", "A"))
     assert tracks == []
@@ -238,6 +387,7 @@ def test_get_artist_top_tracks_empty(svc):
 
 def test_get_artist_top_tracks_error_returns_empty(svc):
     from shuffleupagus.core.model import Artist
+
     svc.client.artist_relationship_view.side_effect = Exception("error")
     tracks = svc.get_artist_top_tracks(Artist("a1", "A"))
     assert tracks == []
@@ -246,6 +396,7 @@ def test_get_artist_top_tracks_error_returns_empty(svc):
 # ---------------------------------------------------------------------------
 # get_playlist_id_for_name
 # ---------------------------------------------------------------------------
+
 
 def _mock_session_get(svc, data_list=None, status_code=200, error_json=None):
     resp = MagicMock()
@@ -261,10 +412,13 @@ def _mock_session_get(svc, data_list=None, status_code=200, error_json=None):
 
 
 def test_get_playlist_id_for_name_found(svc):
-    _mock_session_get(svc, [
-        {"id": "pl1", "attributes": {"name": "My Playlist"}},
-        {"id": "pl2", "attributes": {"name": "Other"}},
-    ])
+    _mock_session_get(
+        svc,
+        [
+            {"id": "pl1", "attributes": {"name": "My Playlist"}},
+            {"id": "pl2", "attributes": {"name": "Other"}},
+        ],
+    )
     assert svc.get_playlist_id_for_name("My Playlist") == "pl1"
 
 
@@ -278,17 +432,50 @@ def test_get_playlist_id_for_name_not_found(svc):
 # sync
 # ---------------------------------------------------------------------------
 
+
+def _mock_applescripts():
+    """Create AppleScript mock that returns None for delete, 0 for count."""
+    scripts = []
+
+    def make_script(*_args, **_kwargs):
+        mock = MagicMock()
+        scripts.append(mock)
+        # First script is the delete (returns None), second is the count (returns 0)
+        mock.run.return_value = None if len(scripts) == 1 else 0
+        return mock
+
+    return make_script
+
+
+def _stub_get_playlist_tracks(svc, return_values):
+    """Patch __get_playlist_tracks to return successive values."""
+    it = iter(return_values)
+    svc._AppleMusicService__get_playlist_tracks = MagicMock(side_effect=lambda _pid: next(it))
+
+
+def _stub_get_playlist_length(svc, value=0):
+    """Patch __get_playlist_length to return a fixed value."""
+    svc._AppleMusicService__get_playlist_length = MagicMock(return_value=value)
+
+
+def _stub_get_playlist_length_seq(svc, return_values):
+    """Patch __get_playlist_length to return successive values."""
+    it = iter(return_values)
+    svc._AppleMusicService__get_playlist_length = MagicMock(side_effect=lambda _pid: next(it))
+
+
 def test_sync(svc):
     svc.get_playlist_id_for_name = MagicMock(return_value="pl1")
-    svc._AppleMusicService__get_playlist_length = MagicMock(return_value=0)
+    # sync reads current (empty), cloud count confirms 3 after batch
+    _stub_get_playlist_tracks(svc, [[]])
+    _stub_get_playlist_length_seq(svc, [3])
 
     post_resp = MagicMock()
     post_resp.status_code = 204
     svc.client._session.post.return_value = post_resp
     svc.client._auth_headers.return_value = {}
 
-    with patch("shuffleupagus.services.appleMusic.service.applescript.AppleScript") as mock_script:
-        mock_script.return_value.run.return_value = None
+    with patch("shuffleupagus.services.appleMusic.service.time.sleep"):
         svc.sync("Playlist", ["t1", "t2", "t3"])
 
     svc.client._session.post.assert_called()
@@ -298,17 +485,334 @@ def test_sync(svc):
 
 def test_sync_batches_tracks(svc):
     svc.get_playlist_id_for_name = MagicMock(return_value="pl1")
-    svc._AppleMusicService__get_playlist_length = MagicMock(return_value=0)
+    tracks = [f"t{i}" for i in range(90)]
+    # sync reads current (empty), cloud count confirms 80 then 90
+    _stub_get_playlist_tracks(svc, [[]])
+    _stub_get_playlist_length_seq(svc, [80, 90])
 
     post_resp = MagicMock()
     post_resp.status_code = 204
     svc.client._session.post.return_value = post_resp
     svc.client._auth_headers.return_value = {}
 
-    tracks = [f"t{i}" for i in range(90)]
-    with patch("shuffleupagus.services.appleMusic.service.applescript.AppleScript") as mock_script:
-        mock_script.return_value.run.return_value = None
+    with patch("shuffleupagus.services.appleMusic.service.time.sleep"):
         svc.sync("Playlist", tracks)
 
     # 90 tracks → 2 batches of 80 and 10
     assert svc.client._session.post.call_count == 2
+
+
+def test_sync_skips_when_unchanged(svc):
+    """When playlist already matches desired, no AppleScript or POST calls."""
+    svc.get_playlist_id_for_name = MagicMock(return_value="pl1")
+    _stub_get_playlist_tracks(svc, [["t1", "t2", "t3"]])
+    svc.client._auth_headers.return_value = {}
+
+    svc.sync("Playlist", ["t1", "t2", "t3"])
+
+    svc.client._session.post.assert_not_called()
+
+
+def test_sync_clears_and_waits_for_cloud(svc):
+    """When playlist is non-empty but different, clear + wait for cloud."""
+    svc.get_playlist_id_for_name = MagicMock(return_value="pl1")
+    # First read: stale tracks; deletion poll returns 0; batch verify returns 2
+    _stub_get_playlist_tracks(svc, [["old1"]])
+    _stub_get_playlist_length_seq(svc, [0, 2])
+
+    post_resp = MagicMock()
+    post_resp.status_code = 204
+    svc.client._session.post.return_value = post_resp
+    svc.client._auth_headers.return_value = {}
+
+    with (
+        patch(
+            "shuffleupagus.services.appleMusic.service.applescript.AppleScript",
+            side_effect=_mock_applescripts(),
+        ),
+        patch("shuffleupagus.services.appleMusic.service.time.sleep"),
+    ):
+        svc.sync("Playlist", ["t1", "t2"])
+
+    svc.client._session.post.assert_called()
+
+
+def test_sync_aborts_when_cloud_deletion_stalls(svc):
+    """If cloud never reports 0 tracks after deletion, abort with error."""
+    svc.get_playlist_id_for_name = MagicMock(return_value="pl1")
+    _stub_get_playlist_tracks(svc, [["old1"]])
+    # Cloud always returns 500 tracks — deletion never completes
+    _stub_get_playlist_length(svc, 500)
+
+    svc.client._auth_headers.return_value = {}
+
+    with (
+        patch(
+            "shuffleupagus.services.appleMusic.service.applescript.AppleScript",
+            side_effect=_mock_applescripts(),
+        ),
+        patch("shuffleupagus.services.appleMusic.service.time.sleep"),
+        pytest.raises(RuntimeError, match="Cloud still reports 500 tracks"),
+    ):
+        svc.sync("Playlist", ["t1", "t2"])
+
+    # Should not have attempted to add any tracks
+    svc.client._session.post.assert_not_called()
+
+
+def test_sync_verify_retries_missing_in_batch(svc):
+    """Cloud count is short, cloud API identifies missing, retry adds them."""
+    svc.get_playlist_id_for_name = MagicMock(return_value="pl1")
+    # sync reads current: empty (no clear)
+    # cloud count returns 2 (short), cloud tracks return [t1, t2]
+    # retry adds t3, cloud count returns 3 (good)
+    _stub_get_playlist_tracks(svc, [[], ["t1", "t2"]])
+    _stub_get_playlist_length_seq(svc, [2, 3])
+
+    post_resp = MagicMock()
+    post_resp.status_code = 204
+    svc.client._session.post.return_value = post_resp
+    svc.client._auth_headers.return_value = {}
+
+    with patch("shuffleupagus.services.appleMusic.service.time.sleep"):
+        svc.sync("Playlist", ["t1", "t2", "t3"])
+
+    # Initial batch + retry of missing t3
+    assert svc.client._session.post.call_count == 2
+
+
+# ---------------------------------------------------------------------------
+# __get_playlist_tracks
+# ---------------------------------------------------------------------------
+
+
+def test_get_playlist_tracks_pagination(svc):
+    """Follow pagination to collect all catalog IDs."""
+    svc.client._auth_headers.return_value = {}
+
+    page1 = MagicMock()
+    page1.status_code = 200
+    page1.json.return_value = {
+        "data": [
+            {"attributes": {"playParams": {"catalogId": "c1"}}},
+            {"attributes": {"playParams": {"catalogId": "c2"}}},
+        ],
+        "next": "/v1/me/library/playlists/pl1/tracks?offset=2",
+    }
+    page2 = MagicMock()
+    page2.status_code = 200
+    page2.json.return_value = {
+        "data": [
+            {"attributes": {"playParams": {"catalogId": "c3"}}},
+        ],
+    }
+    svc.client._session.get.side_effect = [page1, page2]
+
+    result = svc._AppleMusicService__get_playlist_tracks("pl1")
+    assert result == ["c1", "c2", "c3"]
+    assert svc.client._session.get.call_count == 2
+
+
+def test_get_playlist_tracks_empty_404(svc):
+    """API returns 404 with error 40403 for empty playlists."""
+    svc.client._auth_headers.return_value = {}
+
+    resp = MagicMock()
+    resp.status_code = 404
+    resp.json.return_value = {"errors": [{"code": "40403", "title": "No related resources"}]}
+    svc.client._session.get.return_value = resp
+
+    result = svc._AppleMusicService__get_playlist_tracks("pl1")
+    assert result == []
+
+
+def test_get_playlist_tracks_404_unknown_error(svc):
+    """A 404 without error code 40403 raises RuntimeError."""
+    svc.client._auth_headers.return_value = {}
+
+    resp = MagicMock()
+    resp.status_code = 404
+    resp.json.return_value = {"errors": [{"code": "40404", "title": "Not Found"}]}
+    svc.client._session.get.return_value = resp
+
+    with pytest.raises(RuntimeError, match="Failed to read playlist tracks: 404"):
+        svc._AppleMusicService__get_playlist_tracks("pl1")
+
+
+def test_get_playlist_tracks_server_error(svc):
+    """A non-2xx, non-404 response raises RuntimeError."""
+    svc.client._auth_headers.return_value = {}
+
+    resp = MagicMock()
+    resp.status_code = 500
+    svc.client._session.get.return_value = resp
+
+    with pytest.raises(RuntimeError, match="Failed to read playlist tracks: 500"):
+        svc._AppleMusicService__get_playlist_tracks("pl1")
+
+
+# ---------------------------------------------------------------------------
+# __post_batch
+# ---------------------------------------------------------------------------
+
+
+def test_post_batch_retries_then_raises(svc):
+    """__post_batch raises after 3 failed attempts."""
+    svc.client._auth_headers.return_value = {}
+
+    resp = MagicMock()
+    resp.status_code = 500
+    resp.reason = "Internal Server Error"
+    resp.text = "error body"
+    svc.client._session.post.return_value = resp
+
+    with pytest.raises(RuntimeError, match="Failed to add tracks after 3 retries"):
+        svc._AppleMusicService__post_batch("pl1", ["t1"])
+
+    assert svc.client._session.post.call_count == 3
+
+
+# ---------------------------------------------------------------------------
+# __clear_playlist
+# ---------------------------------------------------------------------------
+
+
+def test_clear_playlist_polls_until_zero(svc):
+    """__clear_playlist polls local Music.app until count reaches 0."""
+    counts = [100, 50, 0]
+    scripts = []
+
+    def make_script(*_args, **_kwargs):
+        mock = MagicMock()
+        scripts.append(mock)
+        if len(scripts) == 1:
+            # Delete script
+            mock.run.return_value = None
+        else:
+            # Count script — return successive values
+            it = iter(counts)
+            mock.run.side_effect = lambda: next(it)
+        return mock
+
+    with (
+        patch(
+            "shuffleupagus.services.appleMusic.service.applescript.AppleScript",
+            side_effect=make_script,
+        ),
+        patch("shuffleupagus.services.appleMusic.service.time.sleep"),
+    ):
+        svc._AppleMusicService__clear_playlist("Test")
+
+    # Count script polled 3 times: 100, 50, 0
+    assert scripts[1].run.call_count == 3
+
+
+# ---------------------------------------------------------------------------
+# __add_tracks re-queue
+# ---------------------------------------------------------------------------
+
+
+def test_add_tracks_requeues_missing_after_all_retries(svc):
+    """When verification fails all 3 attempts, missing tracks are re-queued."""
+    svc.client._auth_headers.return_value = {}
+
+    post_resp = MagicMock()
+    post_resp.status_code = 204
+    svc.client._session.post.return_value = post_resp
+
+    # Cloud count never matches: always returns 2 instead of 3
+    # Cloud track list always returns [t1, t2] (t3 missing)
+    # After re-queue, cloud count returns 3 (t3 re-added successfully)
+    svc._AppleMusicService__get_playlist_length = MagicMock(side_effect=[2, 2, 2, 2, 3])
+    svc._AppleMusicService__get_playlist_tracks = MagicMock(
+        side_effect=[
+            ["t1", "t2"],  # verify attempt 1
+            ["t1", "t2"],  # verify attempt 2
+            ["t1", "t2"],  # verify attempt 3
+            ["t1", "t2"],  # final fallback check
+            ["t1", "t2", "t3"],  # re-queued batch verify
+        ]
+    )
+
+    with patch("shuffleupagus.services.appleMusic.service.time.sleep"):
+        svc._AppleMusicService__add_tracks("pl1", ["t1", "t2", "t3"])
+
+    # 1 initial batch + 3 retries of t3 + 1 final fallback retry + 1 re-queued batch
+    assert svc.client._session.post.call_count >= 5
+
+
+def test_add_tracks_raises_when_requeue_rounds_exhausted(svc):
+    """A track that never verifies raises instead of re-queuing forever."""
+    svc.client._auth_headers.return_value = {}
+
+    post_resp = MagicMock()
+    post_resp.status_code = 204
+    svc.client._session.post.return_value = post_resp
+
+    # Cloud never reflects t2: count is always 1, list is always [t1].
+    svc._AppleMusicService__get_playlist_length = MagicMock(return_value=1)
+    svc._AppleMusicService__get_playlist_tracks = MagicMock(return_value=["t1"])
+
+    with (
+        patch("shuffleupagus.services.appleMusic.service.time.sleep"),
+        pytest.raises(RuntimeError, match="could not be verified"),
+    ):
+        svc._AppleMusicService__add_tracks("pl1", ["t1", "t2"])
+
+
+def test_sync_empty_tracks_skips(svc):
+    """sync() with empty track list logs warning and returns."""
+    svc.sync("Playlist", [])
+    svc.sync("Playlist", None)
+    # No API calls should have been made
+    svc.client._session.post.assert_not_called()
+    svc.client._session.get.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# AppleScript string escaping
+# ---------------------------------------------------------------------------
+
+
+def test_applescript_str_escapes_quotes_and_backslashes():
+    assert _applescript_str('My "Best" Mix') == 'My \\"Best\\" Mix'
+    assert _applescript_str("back\\slash") == "back\\\\slash"
+    # Backslash is doubled before the quote is escaped, so the quote's escape
+    # character is not itself escaped.
+    assert _applescript_str('a\\"b') == 'a\\\\\\"b'
+
+
+def test_applescript_str_leaves_plain_text_alone():
+    assert _applescript_str("Shuffleupagus Test") == "Shuffleupagus Test"
+
+
+@pytest.mark.parametrize("bad", ["two\nlines", "carriage\rreturn"])
+def test_applescript_str_rejects_line_breaks(bad):
+    with pytest.raises(ValueError, match="line break"):
+        _applescript_str(bad)
+
+
+def test_clear_playlist_escapes_quoted_name(svc):
+    """A playlist name with a quote produces a valid script, not a broken one."""
+    scripts = []
+
+    def make_script(source, *_args, **_kwargs):
+        scripts.append(source)
+        mock = MagicMock()
+        mock.run.return_value = 0
+        return mock
+
+    with (
+        patch(
+            "shuffleupagus.services.appleMusic.service.applescript.AppleScript",
+            side_effect=make_script,
+        ),
+        patch("shuffleupagus.services.appleMusic.service.time.sleep"),
+    ):
+        svc._AppleMusicService__clear_playlist('My "Best" Mix')
+
+    assert scripts, "no AppleScript was built"
+    for source in scripts:
+        assert 'playlist "My \\"Best\\" Mix"' in source
+        # The raw, unescaped form must not appear — that is the broken script.
+        assert 'playlist "My "Best" Mix"' not in source

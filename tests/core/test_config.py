@@ -5,6 +5,7 @@ from shuffleupagus.core.config import Config, get_filepath
 
 # --- get_filepath ---
 
+
 def test_get_filepath_simple():
     path = get_filepath("config.yaml")
     assert path.endswith("/.config/shuffleupagus/config.yaml")
@@ -16,6 +17,7 @@ def test_get_filepath_rejects_traversal():
 
 
 # --- Config helpers ---
+
 
 def _write_configs(tmp_path, services: dict, artists: dict):
     cfg_dir = tmp_path / ".config" / "shuffleupagus"
@@ -30,7 +32,8 @@ def config(tmp_path, monkeypatch):
     import shuffleupagus.core.config as cfg_mod
 
     monkeypatch.setattr(
-        cfg_mod, "get_filepath",
+        cfg_mod,
+        "get_filepath",
         lambda name: str(tmp_path / ".config" / "shuffleupagus" / name),
     )
     _write_configs(
@@ -141,7 +144,8 @@ def test_missing_config_file_raises(tmp_path, monkeypatch):
     import shuffleupagus.core.config as cfg_mod
 
     monkeypatch.setattr(
-        cfg_mod, "get_filepath",
+        cfg_mod,
+        "get_filepath",
         lambda name: str(tmp_path / name),
     )
     with pytest.raises(FileNotFoundError):

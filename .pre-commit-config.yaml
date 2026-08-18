@@ -26,6 +26,6 @@ repos:
         name: pytest coverage (80% minimum)
         language: system
         entry: uv run pytest
-        args: [--cov=src, --cov-fail-under=80, --cov-report=term-missing, -q]
+        args: [-q]
         pass_filenames: false
         stages: [pre-push]

@@ -9,7 +9,6 @@ dependencies = [
   "coloredlogs              >= 15.0",
   "google-api-python-client >= 2.179.0",
   "google-auth-oauthlib     >= 1.2.2",
-  "joblib                   >= 1.4.2",
   "pyyaml                   >= 6.0.2",
 
   "apple-music-python       >= 1.0.6",
@@ -46,7 +45,7 @@ ignore = [
   "ANN",    # type annotations — gradual adoption, not enforced yet
   "T20",    # print — used intentionally for progress output
   "ERA001", # commented-out code — used for reference
-  "FIX002", # TODO comments — tracked in beads, not code
+  "FIX002", # TODO comments
   "TD",     # TODO formatting
   "FBT",    # boolean arg patterns — common in this codebase
   "S311",   # random — used for shuffling, not cryptography
@@ -107,3 +106,9 @@ error-on-warning = true
 addopts = "--cov=src --cov-report=term-missing"
 testpaths = ["tests"]
 pythonpath = ["src"]
+
+[tool.coverage.run]
+omit = ["src/shuffleupagus/shuffleupagus.py"]
+
+[tool.coverage.report]
+fail_under = 80

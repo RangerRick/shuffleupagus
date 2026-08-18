@@ -2,7 +2,7 @@ from ...core.model import Album, Artist, Track
 
 
 def sanitize_id(id: str) -> str:
-    if id.startswith("http"):
+    if id.startswith(("http://", "https://")):
         id = id.rsplit("/", maxsplit=1)[-1]
         id = id.split("?")[0]
 

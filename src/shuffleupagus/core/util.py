@@ -1,7 +1,11 @@
+import datetime
+import email.utils
 import importlib
 import logging
+import os
 import pkgutil
 import random
+import time
 
 import coloredlogs
 
@@ -11,6 +15,63 @@ logger = logging.getLogger("root")
 logging.getLogger("urllib3").setLevel(logging.FATAL)
 logging.getLogger("spotipy").setLevel(logging.FATAL)
 logging.getLogger("spotipy.client").setLevel(logging.FATAL)
+
+# Nerd Font brand icons (requires a patched font)
+_NERD_FONT_TAGS: dict[str, str] = {
+    "appleMusic": "\uf179 ",  # nf-fa-apple
+    "spotify": "\uf1bc ",  # nf-fa-spotify
+    "youtube": "\uf167 ",  # nf-fa-youtube
+}
+
+_PLAIN_TAGS: dict[str, str] = {
+    "appleMusic": "[apple] ",
+    "spotify": "[spotify] ",
+    "youtube": "[youtube] ",
+}
+
+
+def _use_nerd_fonts() -> bool:
+    return os.environ.get("NERD_FONTS", "").lower() in ("1", "true", "yes")
+
+
+def service_tag(name: str) -> str:
+    """Return a short prefix tag for the given service name."""
+    tags = _NERD_FONT_TAGS if _use_nerd_fonts() else _PLAIN_TAGS
+    return tags.get(name, f"[{name}] ")
+
+
+def parse_retry_after(value: object) -> int:
+    """Parse a Retry-After header value into whole seconds from now.
+
+    RFC 9110 section 10.2.3 permits either delta-seconds or an HTTP-date, so a
+    non-numeric value is spec-legal rather than malformed. Date parsing is left
+    to email.utils, which implements the HTTP-date formats.
+
+    Returns 0 when the value is absent, unparseable, or already past. Callers
+    treat 0 as "no usable Retry-After" and fall back to a generic message.
+    """
+    if value is None:
+        return 0
+    text = str(value).strip()
+    if text.isdigit():
+        return int(text)
+    parsed = email.utils.parsedate_tz(text)
+    if parsed is None:
+        return 0
+    delta = email.utils.mktime_tz(parsed) - time.time()
+    return max(int(delta), 0)
+
+
+def format_retry_message(service_label: str, retry_epoch: float, remaining: float) -> str:
+    """Say when a rate-limit window expires, as both a clock time and a countdown."""
+    retry_time = datetime.datetime.fromtimestamp(retry_epoch, tz=datetime.UTC).astimezone()
+    hours = int(remaining) // 3600
+    minutes = (int(remaining) % 3600) // 60
+    return (
+        f"{service_label} rate-limited. Try again after "
+        f"{retry_time.strftime('%Y-%m-%d %H:%M')} "
+        f"({hours}h {minutes}m from now)"
+    )
 
 
 def init_logging(level: str):
@@ -32,9 +93,9 @@ def load_plugins():
 
 
 # see: https://web.archive.org/web/20250107040006/http://keyj.emphy.de/balanced-shuffle/
-def spread_artist_playlists(artist_playlists, vip_artist_ids) -> list[str]:
+def spread_artist_playlists(artist_playlists, vip_artist_ids, tag="") -> list[str]:
 
-    logging.info("* spreading out artist playlists")
+    logging.info(f"{tag}* spreading out artist playlists")
     max_length = 0
 
     for artistId in artist_playlists:
@@ -80,7 +141,7 @@ def spread_artist_playlists(artist_playlists, vip_artist_ids) -> list[str]:
         # replace the artist playlist with the new spread playlist
         artist_playlists[artistId] = new_p
 
-    logging.info("* merging artist playlists")
+    logging.info(f"{tag}* merging artist playlists")
     artist_ids = list(filter(lambda id: id not in vip_artist_ids, artist_playlists.keys()))
     random.shuffle(artist_ids)
 
@@ -91,7 +152,7 @@ def spread_artist_playlists(artist_playlists, vip_artist_ids) -> list[str]:
         # so that they get mixed in with the other artists
         artist_ids.insert(random.randint(min_position, max_position), vip_id)
 
-    logging.info(f"* combining {max_length} slots for {len(artist_ids)} artists")
+    logging.info(f"{tag}* combining {max_length} slots for {len(artist_ids)} artists")
     # build the final playlist, merging the artist spreads
     playlist = []
     for i in range(max_length):

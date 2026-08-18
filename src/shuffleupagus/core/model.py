@@ -1,12 +1,13 @@
 import datetime
 import random
 import string
+import time
 import unicodedata
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from .cache import CACHE_DEFAULT_CUTOFF, Cache
 from .config import Config
-from .util import logger, spread_artist_playlists
+from .util import format_retry_message, logger, service_tag, spread_artist_playlists
 
 MAX_TOP_TRACKS = 5
 MAX_ARTIST_TRACKS = 10
@@ -109,10 +110,30 @@ class Track(ShufObject):
         return self.duration_ms > duration_ms
 
 
+_ARTIST_POOL_WORKERS = 4
+_ALBUM_POOL_WORKERS = 8
+
+
 class Service:
     name: str
     cache: Cache
     cache_cutoff: float = CACHE_DEFAULT_CUTOFF
+    _artist_pool: ThreadPoolExecutor | None = None
+    _album_pool: ThreadPoolExecutor | None = None
+
+    @property
+    def artist_pool(self) -> ThreadPoolExecutor:
+        """Per-service artist pool, lazily created."""
+        if self._artist_pool is None:
+            self._artist_pool = ThreadPoolExecutor(max_workers=_ARTIST_POOL_WORKERS)
+        return self._artist_pool
+
+    @property
+    def album_pool(self) -> ThreadPoolExecutor:
+        """Per-service album pool, lazily created."""
+        if self._album_pool is None:
+            self._album_pool = ThreadPoolExecutor(max_workers=_ALBUM_POOL_WORKERS)
+        return self._album_pool
 
     def __init__(self, config: Config):
         svc_config = config.service(self.name)
@@ -126,15 +147,56 @@ class Service:
             cutoff = self.cache_cutoff
         self.cache = Cache(self.name, cutoff=cutoff)
         self.config = svc_config
+        self.tag = service_tag(self.name)
 
     def sanitize_id(self, id: str) -> str:
         return id
 
+    def preflight(self) -> None:
+        """Pre-check run sequentially before threaded processing starts.
+
+        Override to validate credentials, prompt for re-auth, etc.
+        Raising here aborts the entire run before any service threads start.
+        """
+
     def login(self) -> None:
         raise NotImplementedError
 
+    def _shutdown_pools(self, wait: bool) -> None:
+        """Drop queued work in both pools. Tasks already running are not interrupted."""
+        for pool in (self._artist_pool, self._album_pool):
+            if pool is not None:
+                pool.shutdown(wait=wait, cancel_futures=True)
+
     def close(self) -> None:
-        raise NotImplementedError
+        """Shut down the worker pools, evict expired entries, release the connection.
+
+        Pools come down first, and with wait=True: a worker still running would
+        otherwise reach for a cache connection that is already closed. This also
+        stops the pools' non-daemon threads from holding up process exit.
+        """
+        self._shutdown_pools(wait=True)
+        self.cache.save()
+        self.cache.close()
+
+    _RATE_LIMIT_CACHE_KEY = "rate_limit_until"
+
+    def _record_rate_limit(self, service_label: str, retry_after: int) -> str:
+        """Persist a rate-limit window so the next run fails fast. Returns the message."""
+        retry_epoch = time.time() + retry_after
+        self.cache.write(self._RATE_LIMIT_CACHE_KEY, retry_epoch, ttl=retry_after)
+        return format_retry_message(service_label, retry_epoch, retry_after)
+
+    def _check_rate_limit(self, service_label: str) -> None:
+        """Fail fast if an earlier run recorded a rate-limit window still in effect."""
+        retry_epoch = self.cache.read_stale(self._RATE_LIMIT_CACHE_KEY)
+        if not retry_epoch:
+            return
+        remaining = retry_epoch - time.time()
+        if remaining <= 0:
+            self.cache.delete(self._RATE_LIMIT_CACHE_KEY)
+            return
+        raise RuntimeError(format_retry_message(service_label, retry_epoch, remaining))
 
     def get_artist(self, artist: str | Artist) -> Artist | None:
         raise NotImplementedError
@@ -157,25 +219,28 @@ class Service:
     def get_playlist_id_for_name(self, playlist_name: str) -> str:
         raise NotImplementedError
 
-    def generate_playlist(
+    def collect_tracks(
         self,
         artist_ids: list[str] | None = None,
         excluded_album_ids: list[str] | None = None,
         excluded_track_ids: list[str] | None = None,
-        vip_artist_ids: list[str] | None = None,
-    ) -> list[str]:
+    ) -> dict[str, list[Track]]:
+        """Fetch per-artist track lists (threaded, IO-heavy)."""
         _artist_ids: list[str] = [] if artist_ids is None else artist_ids
         _excluded_album_ids: list[str] = [] if excluded_album_ids is None else excluded_album_ids
         _excluded_track_ids: list[str] = [] if excluded_track_ids is None else excluded_track_ids
-        _vip_artist_ids: list[str] = [] if vip_artist_ids is None else vip_artist_ids
         artist_playlists: dict[str, list[Track]] = {}
         total = len(_artist_ids)
+        logger.info(f"{self.tag}* collecting tracks for {total} artists")
 
         def _process(idx: int, artist_id: str) -> tuple[str, list[Track]]:
+            tag = self.tag
+            logger.info(f"{tag}* [{idx + 1}/{total}] fetching {artist_id}")
             artist = self.get_artist(artist_id)
             if artist is None:
-                raise ValueError(f"Artist {artist_id} not found")
-            logger.info(f"* processing artist {artist.name} ({idx + 1}/{total})")
+                logger.warning(f"{tag}  ! artist {artist_id} not found, skipping")
+                return artist_id, []
+            logger.info(f"{tag}* [{idx + 1}/{total}] processing {artist.name}")
 
             top_tracks = self.get_artist_top_tracks(artist)
             top_tracks = [
@@ -216,19 +281,42 @@ class Service:
             random.shuffle(deduped)
             playlist = top_tracks[0:MAX_TOP_TRACKS] + deduped + top_tracks[MAX_TOP_TRACKS:-1]
             playlist = playlist[0 : MAX_TOP_TRACKS + MAX_ARTIST_TRACKS]
-            logger.info(f"  * found {len(playlist)} valid tracks for {artist.name}")
+            logger.info(f"{tag}  * found {len(playlist)} valid tracks for {artist.name}")
             random.shuffle(playlist)
             return artist_id, playlist
 
-        with ThreadPoolExecutor(max_workers=4) as executor:
-            futures = {
-                executor.submit(_process, idx, artist_id): artist_id for idx, artist_id in enumerate(_artist_ids)
-            }
-            for future in as_completed(futures):
+        futures = {self.artist_pool.submit(_process, idx, aid): aid for idx, aid in enumerate(_artist_ids)}
+        fatal_error = None
+        for future in as_completed(futures):
+            artist_id = futures[future]
+            try:
                 a_id, playlist = future.result()
                 artist_playlists[a_id] = playlist
+            except RuntimeError as e:
+                fatal_error = e
+                # Cancelling each future only drops the ones that have not started;
+                # the queued backlog would still run and keep calling an API that
+                # just rate-limited us. cancel_futures drops the whole backlog.
+                # wait=False so the abort is not held up by in-flight calls —
+                # close() shuts the pools down again with wait=True and reaps them.
+                self._shutdown_pools(wait=False)
+                break
+            except Exception:
+                logger.exception(f"{self.tag}  ! failed to process artist {artist_id}, skipping")
 
-        return spread_artist_playlists(artist_playlists, _vip_artist_ids)
+        if fatal_error is not None:
+            raise fatal_error
+
+        return artist_playlists
+
+    def generate_playlist(
+        self,
+        artist_playlists: dict[str, list[Track]],
+        vip_artist_ids: list[str] | None = None,
+    ) -> list[str]:
+        """Spread and merge collected tracks into a final playlist (fast, CPU-only)."""
+        _vip_artist_ids: list[str] = [] if vip_artist_ids is None else vip_artist_ids
+        return spread_artist_playlists(artist_playlists, _vip_artist_ids, self.tag)
 
     def sync(self, playlist_name: str, tracks: list[str] | None = None) -> None:
         raise NotImplementedError

@@ -1,3 +1,4 @@
+import sqlite3
 import threading
 import time
 
@@ -8,10 +9,18 @@ from shuffleupagus.core.cache import CACHE_DEFAULT_CUTOFF, Cache
 
 @pytest.fixture
 def cache(tmp_path, monkeypatch):
-    monkeypatch.setattr(
-        Cache, "_filename", lambda self: str(tmp_path / f"{self.name}.joblib.gz")
+    monkeypatch.setattr(Cache, "_db_path", lambda self: str(tmp_path / f"{self.name}.db"))
+    return Cache("test", cutoff=CACHE_DEFAULT_CUTOFF)
+
+
+def _inject_stale(cache, key, value, ttl, age):
+    """Write an entry then backdate its stored_at so it appears expired."""
+    cache.write(key, value, ttl=ttl)
+    cache._conn.execute(
+        "UPDATE cache SET stored_at = ? WHERE key = ?",
+        (time.time() - age, key),
     )
-    return Cache("test", cutoff=CACHE_DEFAULT_CUTOFF, autosave=False)
+    cache._conn.commit()
 
 
 def test_write_and_read(cache):
@@ -30,15 +39,14 @@ def test_write_overwrites(cache):
 
 
 def test_read_expired_returns_none(cache):
-    # Inject an expired entry directly (timestamp in the past, short TTL)
-    cache._cache["stale"] = ["stale_value", time.time() - 3600, 60.0]
+    _inject_stale(cache, "stale", "stale_value", ttl=60.0, age=3600)
     assert cache.read("stale") is None
 
 
 def test_read_stale_returns_expired_value(cache):
-    cache._cache["stale"] = ["stale_value", time.time() - 3600, 60.0]
-    assert cache.read("stale") is None           # expired: read() returns None
-    assert cache.read_stale("stale") == "stale_value"  # stale read still returns value
+    _inject_stale(cache, "stale", "stale_value", ttl=60.0, age=3600)
+    assert cache.read("stale") is None
+    assert cache.read_stale("stale") == "stale_value"
 
 
 def test_read_stale_missing_returns_none(cache):
@@ -46,7 +54,7 @@ def test_read_stale_missing_returns_none(cache):
 
 
 def test_touch_refreshes_expired_entry(cache):
-    cache._cache["old"] = ["val", time.time() - 3600, 60.0]
+    _inject_stale(cache, "old", "val", ttl=60.0, age=3600)
     assert cache.read("old") is None
     assert cache.touch("old") is True
     assert cache.read("old") == "val"
@@ -67,25 +75,17 @@ def test_delete_missing_returns_false(cache):
 
 
 def test_write_custom_ttl(cache):
-    # write with explicit short TTL; entry expires immediately when injected old
-    cache._cache["short"] = ["val", time.time() - 10, 5.0]
-    assert cache.read("short") is None           # expired
-    assert cache.read_stale("short") == "val"    # stale read returns it
+    _inject_stale(cache, "short", "val", ttl=5.0, age=10)
+    assert cache.read("short") is None
+    assert cache.read_stale("short") == "val"
 
 
 def test_clean_evicts_expired(tmp_path, monkeypatch):
-    c = Cache.__new__(Cache)
-    c.name = "test"
-    c.cutoff = 60.0
-    c.autosave = False
-    c._update_count = 0
-    c._lock = threading.Lock()
-    c._saving = False
-    c._cache = {}
-    monkeypatch.setattr(Cache, "_filename", lambda self: str(tmp_path / "t.joblib.gz"))
+    monkeypatch.setattr(Cache, "_db_path", lambda self: str(tmp_path / "t.db"))
+    c = Cache("test", cutoff=60.0)
 
-    c._cache["old"] = ["stale_value", time.time() - 3600, 60.0]
-    c._cache["fresh"] = ["fresh_value", time.time(), 60.0]
+    _inject_stale(c, "old", "stale_value", ttl=60.0, age=3600)
+    c.write("fresh", "fresh_value", ttl=60.0)
 
     evicted = c._clean()
 
@@ -104,34 +104,15 @@ def test_clean_keeps_fresh_entries(cache):
 
 
 def test_save_and_load(tmp_path, monkeypatch):
-    path = str(tmp_path / "svc.joblib.gz")
-    monkeypatch.setattr(Cache, "_filename", lambda self: path)
+    db_path = str(tmp_path / "svc.db")
+    monkeypatch.setattr(Cache, "_db_path", lambda self: db_path)
 
-    c1 = Cache("svc", autosave=False)
+    c1 = Cache("svc")
     c1.write("hello", "world")
     c1.save()
 
-    c2 = Cache("svc", autosave=False)
+    c2 = Cache("svc")
     assert c2.read("hello") == "world"
-
-
-def test_autosave_triggers(tmp_path, monkeypatch):
-    path = str(tmp_path / "auto.joblib.gz")
-    monkeypatch.setattr(Cache, "_filename", lambda self: path)
-    import shuffleupagus.core.cache as cache_mod
-
-    original = cache_mod.CACHE_AUTOSAVE_LIMIT
-    cache_mod.CACHE_AUTOSAVE_LIMIT = 2
-
-    c = Cache("auto", autosave=True)
-    for i in range(4):
-        c.write(f"k{i}", i)
-
-    # After 4 writes with limit=2, save should have been triggered (count hits 3 > 2)
-    c2 = Cache("auto", autosave=False)
-    assert c2.read("k0") == 0
-
-    cache_mod.CACHE_AUTOSAVE_LIMIT = original
 
 
 # ---------------------------------------------------------------------------
@@ -172,9 +153,9 @@ def test_concurrent_reads_and_writes(cache):
 
 def test_concurrent_write_and_save(tmp_path, monkeypatch):
     """Concurrent writes during save() produce no corruption."""
-    path = str(tmp_path / "concurrent.joblib.gz")
-    monkeypatch.setattr(Cache, "_filename", lambda self: path)
-    c = Cache("concurrent", autosave=False)
+    db_path = str(tmp_path / "concurrent.db")
+    monkeypatch.setattr(Cache, "_db_path", lambda self: db_path)
+    c = Cache("concurrent")
     errors: list[Exception] = []
 
     def writer(thread_id):
@@ -203,32 +184,28 @@ def test_concurrent_write_and_save(tmp_path, monkeypatch):
     assert not errors, f"Concurrent write+save raised: {errors}"
 
 
-def test_autosave_under_contention(tmp_path, monkeypatch):
-    """Autosave with low threshold and 8 threads does not deadlock."""
-    import shuffleupagus.core.cache as cache_mod
+def test_close_releases_connection(cache):
+    """close() closes the sqlite connection, so later use raises."""
+    cache.write("k", "v")
+    cache.close()
+    with pytest.raises(sqlite3.ProgrammingError):
+        cache.read("k")
 
-    path = str(tmp_path / "contention.joblib.gz")
-    monkeypatch.setattr(Cache, "_filename", lambda self: path)
-    original = cache_mod.CACHE_AUTOSAVE_LIMIT
-    cache_mod.CACHE_AUTOSAVE_LIMIT = 5
 
-    c = Cache("contention", autosave=True)
-    errors: list[Exception] = []
+def test_close_takes_the_lock(cache):
+    """close() acquires _lock, so it cannot cut into an in-flight statement."""
+    cache.write("k", "v")
+    acquired = []
+    real_lock = cache._lock
 
-    def worker(thread_id):
-        try:
-            for i in range(OPS_PER_THREAD):
-                c.write(f"t{thread_id}-k{i}", i)
-        except Exception as exc:
-            errors.append(exc)
+    class _TrackingLock:
+        def __enter__(self):
+            acquired.append(True)
+            return real_lock.__enter__()
 
-    threads = [threading.Thread(target=worker, args=(t,)) for t in range(NUM_THREADS)]
-    for t in threads:
-        t.start()
-    for t in threads:
-        t.join(timeout=30)
+        def __exit__(self, *args):
+            return real_lock.__exit__(*args)
 
-    alive = [t for t in threads if t.is_alive()]
-    cache_mod.CACHE_AUTOSAVE_LIMIT = original
-    assert not alive, "Deadlock detected: threads still alive after timeout"
-    assert not errors, f"Autosave contention raised: {errors}"
+    cache._lock = _TrackingLock()
+    cache.close()
+    assert acquired, "close() did not take the lock"

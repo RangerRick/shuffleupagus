@@ -1,22 +1,40 @@
 import copy
-from concurrent.futures import ThreadPoolExecutor, as_completed
+import sys
+import threading
+from concurrent.futures import as_completed
 
+import requests.adapters
 import spotipy
 from spotipy.oauth2 import SpotifyOAuth
+from urllib3.util.retry import Retry
 
 from ...core.model import Album, Artist, Service, Track
-from ...core.util import logger
+from ...core.util import logger, parse_retry_after
 from .model import SpotifyAlbum, SpotifyArtist, SpotifyTrack, sanitize_id
 
 # Fingerprint TTL: how long before we re-check whether a new album has been released.
 # Short enough to catch new releases, long enough to avoid hammering the API every run.
 _FINGERPRINT_TTL = 60 * 60 * 24  # 24 hours
 
+_REQUEST_TIMEOUT = 30
+
+
+_NO_RETRY_AFTER_MESSAGE = "Spotify rate-limited (no Retry-After header). Try again later."
+
+
+def _retry_after_seconds(exc: Exception) -> int:
+    """Read the Retry-After header off a rate-limit exception, 0 when absent."""
+    headers = getattr(exc, "headers", None) or {}
+    return parse_retry_after(headers.get("Retry-After"))
+
 
 class SpotifyService(Service):
     name = "spotify"
 
     spotify: spotipy.Spotify
+    _api_lock: threading.Lock
+
+    _MAX_VERIFY_ROUNDS = 3
 
     def _require_config(self, key: str) -> str:
         val = self.config.get(key)
@@ -25,16 +43,82 @@ class SpotifyService(Service):
         return val
 
     def login(self):
+        self._api_lock = threading.Lock()
+        self._rate_limited: str | None = None
         creds = SpotifyOAuth(
             client_id=self._require_config("client-id"),
             client_secret=self._require_config("client-secret"),
             scope=self._require_config("scope"),
             redirect_uri="http://localhost:9090/",
+            requests_timeout=_REQUEST_TIMEOUT,
         )
-        self.spotify = spotipy.Spotify(auth_manager=creds)
+        self.spotify = spotipy.Spotify(
+            auth_manager=creds,
+            requests_timeout=_REQUEST_TIMEOUT,
+            retries=0,
+            status_retries=0,
+        )
+        # Disable urllib3's special 429 handling so the response (with
+        # Retry-After header) flows through as a normal HTTPError instead
+        # of being swallowed into a headerless MaxRetryError.
+        retry = Retry(total=0, respect_retry_after_header=False)
+        adapter = requests.adapters.HTTPAdapter(max_retries=retry)
+        session: requests.Session = self.spotify._session  # type: ignore[assignment]
+        session.mount("https://", adapter)
+        session.mount("http://", adapter)
+        self._acquire_token(creds)
+        self._check_rate_limit("Spotify")
 
-    def close(self):
-        self.cache.save()
+    def _acquire_token(self, creds: SpotifyOAuth):
+        """Force token acquisition on the main thread.
+
+        Interactive auth (browser) works here; in worker threads it would
+        block forever.  When there is no TTY, fail fast instead of hanging.
+        """
+        token_info = creds.validate_token(
+            creds.cache_handler.get_cached_token(),
+        )
+        if token_info is not None and not creds.is_token_expired(token_info):
+            return
+
+        if token_info is not None:
+            try:
+                creds.refresh_access_token(token_info["refresh_token"])
+            except Exception as e:
+                if not sys.stdin.isatty():
+                    raise RuntimeError(
+                        "Spotify token expired and refresh failed. Run interactively to re-authenticate."
+                    ) from e
+                logger.warning(f"{self.tag}token refresh failed ({e}), re-authenticating")
+            else:
+                return
+
+        if not sys.stdin.isatty():
+            raise RuntimeError("No valid Spotify token. Run interactively to authenticate.")
+
+        creds.get_access_token(as_dict=False)
+
+    def _call(self, method, *args, **kwargs):
+        """Serialize Spotify API access and detect rate limiting."""
+        if self._rate_limited:
+            raise RuntimeError(self._rate_limited)
+        with self._api_lock:
+            if self._rate_limited:
+                raise RuntimeError(self._rate_limited)
+            try:
+                return method(*args, **kwargs)
+            except (spotipy.SpotifyException, Exception) as e:
+                status = getattr(e, "http_status", None)
+                msg = str(e)
+                if status == 429 or "429" in msg:
+                    retry_after = _retry_after_seconds(e)
+                    if retry_after > 0:
+                        rate_msg = self._record_rate_limit("Spotify", retry_after)
+                    else:
+                        rate_msg = _NO_RETRY_AFTER_MESSAGE
+                    self._rate_limited = rate_msg
+                    raise RuntimeError(rate_msg) from e
+                raise
 
     def sanitize_id(self, id: str) -> str:
         return sanitize_id(id)
@@ -56,7 +140,7 @@ class SpotifyService(Service):
             if artist_obj:
                 ret = artist_obj
             else:
-                ret = self.spotify.artist(artist_id)
+                ret = self._call(self.spotify.artist, artist_id)
             self.cache.write(cache_key, ret)
 
         return SpotifyArtist.from_dict(ret)
@@ -67,7 +151,7 @@ class SpotifyService(Service):
         cache_key = "album:" + album_id
         ret = self.cache.read(cache_key)
         if not ret:
-            ret = self.spotify.album(album_id)
+            ret = self._call(self.spotify.album, album_id)
             self.cache.write(cache_key, ret)
 
         return SpotifyAlbum.from_dict(ret)
@@ -82,20 +166,25 @@ class SpotifyService(Service):
             stale = self.cache.read_stale(cache_key)
             if stale is not None:
                 try:
-                    latest = self.spotify.artist_albums(artist.id, limit=1)
+                    latest = self._call(self.spotify.artist_albums, artist.id, limit=1)
                     if latest and "items" in latest and latest["items"]:
                         latest_id = latest["items"][0]["id"]
                         cached_fp = self.cache.read_stale(fp_key)
                         if cached_fp == latest_id:
-                            logger.debug(f"* fingerprint match for {artist.name}, extending cache")
+                            logger.debug(f"{self.tag}* fingerprint match for {artist.name}, extending cache")
                             self.cache.touch(cache_key)
                             self.cache.write(fp_key, latest_id, ttl=_FINGERPRINT_TTL)
                             ret = stale
+                except RuntimeError:
+                    # _call() raises RuntimeError for rate limiting. Let it
+                    # propagate so collect_tracks() aborts the run, instead of
+                    # burying a 429 in a debug-level "fingerprint check failed".
+                    raise
                 except Exception as e:
-                    logger.debug(f"* fingerprint check failed for {artist.id}: {e}")
+                    logger.debug(f"{self.tag}* fingerprint check failed for {artist.id}: {e}")
 
         if ret is None:
-            album = self.spotify.artist_albums(artist.id)
+            album = self._call(self.spotify.artist_albums, artist.id)
             if album is not None and "items" in album:
                 ret = album["items"]
             self.cache.write(cache_key, ret if ret is not None else [])
@@ -115,7 +204,7 @@ class SpotifyService(Service):
 
         ret = self.cache.read(cache_key)
         if not ret:
-            t = self.spotify.album_tracks(album.id)
+            t = self._call(self.spotify.album_tracks, album.id)
             if t is not None and "items" in t:
                 ret = t["items"]
             self.cache.write(cache_key, ret)
@@ -146,10 +235,15 @@ class SpotifyService(Service):
             return []
 
         tracks: list[Track] = []
-        with ThreadPoolExecutor(max_workers=8) as executor:
-            futures = {executor.submit(self.get_album_tracks, album): album for album in albums}
-            for future in as_completed(futures):
+        futures = {self.album_pool.submit(self.get_album_tracks, album): album for album in albums}
+        for future in as_completed(futures):
+            album = futures[future]
+            try:
                 tracks += future.result()
+            except Exception:
+                logger.exception(
+                    f"{self.tag}  ! error fetching tracks for album '{album.name}' (artist: {artist.name}), skipping"
+                )
 
         return tracks
 
@@ -158,7 +252,7 @@ class SpotifyService(Service):
 
         ret = self.cache.read(cache_key)
         if not ret:
-            ret = self.spotify.artist_top_tracks(artist.id)
+            ret = self._call(self.spotify.artist_top_tracks, artist.id)
             self.cache.write(cache_key, ret)
 
         tracks = []
@@ -190,7 +284,7 @@ class SpotifyService(Service):
     def get_playlist_id_for_name(self, playlist_name: str) -> str:
         offset = 0
         while True:
-            results = self.spotify.current_user_playlists(limit=50, offset=offset)
+            results = self._call(self.spotify.current_user_playlists, limit=50, offset=offset)
             if results and "items" in results:
                 items = results["items"]
                 for item in items:
@@ -201,12 +295,64 @@ class SpotifyService(Service):
             offset += 50
         raise ValueError(f"Playlist not found: {playlist_name}")
 
+    def __get_playlist_track_ids(self, playlist_id: str) -> list[str]:
+        """Read every track ID currently in the playlist."""
+        ids: list[str] = []
+        offset = 0
+        while True:
+            results = self._call(
+                self.spotify.playlist_items,
+                playlist_id,
+                fields="items(track(id))",
+                limit=100,
+                offset=offset,
+            )
+            items = results.get("items", []) if results else []
+            for item in items:
+                track = item.get("track") or {}
+                if track.get("id"):
+                    ids.append(track["id"])
+            if len(items) < 100:
+                break
+            offset += 100
+        return ids
+
+    def __verify_playlist(self, playlist_id: str, expected_ids: list[str]) -> None:
+        """Confirm every track reached the playlist, re-adding any that did not.
+
+        Spotify's API is read-after-write consistent, so no settle delay is
+        needed here — a track absent from the read-back was genuinely dropped.
+        """
+        expected = set(expected_ids)
+        for round_num in range(self._MAX_VERIFY_ROUNDS + 1):
+            missing = expected - set(self.__get_playlist_track_ids(playlist_id))
+            if not missing:
+                logger.info(f"{self.tag}  * verified {len(expected)} tracks in playlist")
+                return
+            if round_num == self._MAX_VERIFY_ROUNDS:
+                raise RuntimeError(
+                    f"{len(missing)} tracks could not be verified in the Spotify playlist "
+                    f"after {self._MAX_VERIFY_ROUNDS} re-add rounds: {sorted(missing)}"
+                )
+            logger.warning(
+                f"{self.tag}  ! {len(missing)} tracks missing after sync, "
+                f"re-adding (round {round_num + 1}/{self._MAX_VERIFY_ROUNDS})"
+            )
+            retry = list(missing)
+            while retry:
+                self._call(self.spotify.playlist_add_items, playlist_id, retry[0:80])
+                del retry[0:80]
+
     def sync(self, playlist_name: str, tracks: list[str] | None = None):
         playlist_id = self.get_playlist_id_for_name(playlist_name)
 
-        playlist_tracks = copy.deepcopy(tracks or [])
-        self.spotify.playlist_replace_items(playlist_id, playlist_tracks[0:80])
+        expected_ids = list(tracks or [])
+        playlist_tracks = copy.deepcopy(expected_ids)
+        self._call(self.spotify.playlist_replace_items, playlist_id, playlist_tracks[0:80])
         del playlist_tracks[0:80]
         while len(playlist_tracks) > 0:
-            self.spotify.playlist_add_items(playlist_id, playlist_tracks[0:80])
+            self._call(self.spotify.playlist_add_items, playlist_id, playlist_tracks[0:80])
             del playlist_tracks[0:80]
+
+        if expected_ids:
+            self.__verify_playlist(playlist_id, expected_ids)

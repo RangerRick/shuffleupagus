@@ -13,31 +13,72 @@ from shuffleupagus.core.cache import CACHE_DEFAULT_CUTOFF, Cache
 
 def _make_cache(tmp_dir: str, name: str = "test", cutoff: float = CACHE_DEFAULT_CUTOFF) -> Cache:
     """Create a Cache that persists to a temp directory."""
-    path = os.path.join(tmp_dir, f"{name}.joblib.gz")
-    with patch.object(Cache, "_filename", return_value=path):
-        c = Cache(name, cutoff=cutoff, autosave=False)
-    # Keep the patched filename for subsequent calls
-    c._filename = lambda: path  # type: ignore[method-assign]
+    path = os.path.join(tmp_dir, f"{name}.db")
+    with patch.object(Cache, "_db_path", return_value=path):
+        c = Cache(name, cutoff=cutoff)
+    c._db_path = lambda: path  # type: ignore[method-assign]
     return c
 
 
-# Values that joblib can round-trip without issue.
-_serializable = st.one_of(
+# Strings that stress JSON quoting: embedded quotes, backslashes, control
+# characters, non-BMP emoji, combining marks, and zero-width joiners.
+_awkward_text = st.one_of(
+    st.text(),
+    st.sampled_from(
+        [
+            '"',
+            "\\",
+            '\\"',
+            "\n\r\t",
+            "\x00",
+            "\0embedded null",
+            "line1\nline2",
+            "🎵",
+            "👨‍👩‍👧",  # ZWJ sequence
+            "é",  # combining acute accent
+            "\u200b",  # zero-width space
+            "﻿",  # BOM
+            "'; DROP TABLE cache; --",
+            '{"not": "json"}',
+        ]
+    ),
+)
+
+# Scalars JSON round-trips exactly. Floats exclude nan/inf, which JSON cannot
+# represent. Integers go past 2**53 to catch precision loss.
+_scalar = st.one_of(
     st.none(),
     st.booleans(),
-    st.integers(),
+    st.integers(min_value=-(2**70), max_value=2**70),
     st.floats(allow_nan=False, allow_infinity=False),
-    st.text(),
-    st.binary(),
-    st.lists(st.integers()),
-    st.dictionaries(st.text(), st.integers()),
+    _awkward_text,
+)
+
+# Nested, heterogeneous containers — dicts of lists of dicts, mixed-type lists.
+_serializable = st.recursive(
+    _scalar,
+    lambda children: st.one_of(
+        st.lists(children, max_size=5),
+        st.dictionaries(_awkward_text, children, max_size=5),
+    ),
+    max_leaves=15,
 )
 
 _key = st.text(min_size=1)
 
 
+def _inject_stale(cache, key, value, ttl, age):
+    """Write an entry then backdate its stored_at so it appears expired."""
+    cache.write(key, value, ttl=ttl)
+    cache._conn.execute(
+        "UPDATE cache SET stored_at = ? WHERE key = ?",
+        (time.time() - age, key),
+    )
+    cache._conn.commit()
+
+
 # ---------------------------------------------------------------------------
-# Write → read roundtrip
+# Write -> read roundtrip
 # ---------------------------------------------------------------------------
 
 
@@ -81,7 +122,7 @@ def test_expired_entry_not_readable(key, value, age):
     with tempfile.TemporaryDirectory() as tmp:
         cache = _make_cache(tmp)
         ttl = age / 2.0  # TTL is half the age, so entry is definitely expired
-        cache._cache[key] = [value, time.time() - age, ttl]
+        _inject_stale(cache, key, value, ttl=ttl, age=age)
         assert cache.read(key) is None
 
 
@@ -91,8 +132,7 @@ def test_stale_read_returns_expired_value(key, value, age):
     with tempfile.TemporaryDirectory() as tmp:
         cache = _make_cache(tmp)
         ttl = age / 2.0
-        cache._cache[key] = [value, time.time() - age, ttl]
-        # read() sees nothing, read_stale() sees the value
+        _inject_stale(cache, key, value, ttl=ttl, age=age)
         assert cache.read(key) is None
         assert cache.read_stale(key) == value
 
@@ -117,7 +157,7 @@ def test_touch_makes_expired_entry_readable(key, value, age):
     with tempfile.TemporaryDirectory() as tmp:
         cache = _make_cache(tmp)
         ttl = age / 2.0
-        cache._cache[key] = [value, time.time() - age, ttl]
+        _inject_stale(cache, key, value, ttl=ttl, age=age)
         assert cache.read(key) is None
         result = cache.touch(key)
         assert result is True

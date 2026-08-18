@@ -1,12 +1,15 @@
 import json
+import os
 import re
-from concurrent.futures import ThreadPoolExecutor, as_completed
+import sys
+from concurrent.futures import as_completed
 from pathlib import Path
 
 import requests
+import ytmusicapi
 from ytmusicapi import YTMusic
 from ytmusicapi.auth.oauth import OAuthCredentials, RefreshingToken
-from ytmusicapi.exceptions import YTMusicServerError
+from ytmusicapi.exceptions import YTMusicServerError, YTMusicUserError
 
 from ...core.config import get_filepath
 from ...core.model import Album, Artist, Service, Track
@@ -28,7 +31,8 @@ class YoutubeService(Service):
     name = "youtube"
     cache_cutoff = 60 * 60 * 24 * 90  # 90 days — artist/album data is stable; keeps cache warm across OAuth refreshes
 
-    client: YTMusic
+    client: YTMusic  # browser-auth client for browsing artists/albums
+    _oauth_client: YTMusic | None = None  # OAuth client for Data API (playlist sync)
 
     def _require_config(self, key: str) -> str:
         val = self.config.get(key)
@@ -36,24 +40,149 @@ class YoutubeService(Service):
             raise ValueError(f"Missing required config key 'services.youtube.{key}'")
         return val
 
-    def login(self):
-        auth_file = Path(get_filepath(self._require_config("auth-file")))
-        client_id = self.config.get("client-id")
-        client_secret = self.config.get("client-secret")
+    def _is_browser_auth(self) -> bool:
+        return not (self.config.get("client-id") and self.config.get("client-secret"))
 
-        if client_id and client_secret:
+    def _auth_file(self) -> Path:
+        return Path(get_filepath(self._require_config("auth-file")))
+
+    def _browser_auth_file(self) -> Path:
+        """Browser cookie file — same as auth-file for browser-only auth,
+        separate file when OAuth is configured (since auth-file holds the
+        OAuth token)."""
+        base = self._auth_file()
+        if self._is_browser_auth():
+            return base
+        return base.with_stem(base.stem + "_browser")
+
+    _MAX_AUTH_ATTEMPTS = 3
+    _MAX_VERIFY_ROUNDS = 3
+
+    def preflight(self):
+        browser_file = self._browser_auth_file()
+        if not browser_file.exists():
+            logger.warning(
+                f"{self.tag}* browser cookie file not found ({browser_file.name}), starting setup",
+            )
+            self._setup_browser_auth_with_retry(browser_file)
+            logger.info(f"{self.tag}* browser cookies validated successfully")
+            return
+
+        if not self._try_validate_browser_file(browser_file):
+            logger.warning(
+                f"{self.tag}* browser cookies expired or invalid, starting re-auth",
+            )
+            self._setup_browser_auth_with_retry(browser_file)
+
+        logger.info(f"{self.tag}* browser cookies validated successfully")
+
+    def _try_validate_browser_file(self, browser_file: Path) -> bool:
+        """Try to load and validate browser cookies. Returns False on any failure."""
+        try:
+            client = YTMusic(str(browser_file))
+        except (YTMusicUserError, YTMusicServerError, KeyError) as exc:
+            logger.warning(f"{self.tag}* browser cookie file is invalid: {exc}")
+            return False
+        return self._validate_browser_auth(client)
+
+    def _setup_browser_auth_with_retry(self, browser_file: Path) -> None:
+        """Run browser auth setup, validate, and retry on failure."""
+        for attempt in range(1, self._MAX_AUTH_ATTEMPTS + 1):
+            if not self._setup_browser_auth(browser_file):
+                raise ValueError("YouTube browser auth setup failed")
+            if self._try_validate_browser_file(browser_file):
+                return
+            logger.warning(
+                f"{self.tag}* browser cookies invalid after setup"
+                f" (attempt {attempt}/{self._MAX_AUTH_ATTEMPTS}),"
+                " please try again",
+            )
+            browser_file.unlink(missing_ok=True)
+        raise ValueError(
+            f"YouTube browser auth failed after {self._MAX_AUTH_ATTEMPTS} attempts",
+        )
+
+    def login(self):
+        # Browser-auth client for browsing artists/albums (always needed)
+        browser_file = self._browser_auth_file()
+        self.client = YTMusic(str(browser_file))
+
+        # OAuth client for Data API playlist management (optional)
+        if not self._is_browser_auth():
+            auth_file = self._auth_file()
+            client_id = self._require_config("client-id")
+            client_secret = self._require_config("client-secret")
             creds = OAuthCredentials(client_id, client_secret)
             if self._load_oauth_token(auth_file) is None:
-                logger.warning("* YouTube auth token missing or not OAuth format; starting login flow")
+                logger.warning(f"{self.tag}* YouTube auth token missing or not OAuth format; starting login flow")
                 self._prompt_for_oauth(creds, auth_file)
             try:
-                self.client = YTMusic(str(auth_file), oauth_credentials=creds)
+                self._oauth_client = YTMusic(str(auth_file), oauth_credentials=creds)
             except YTMusicServerError:
-                logger.warning("* YouTube auth token invalid; starting login flow")
+                logger.warning(f"{self.tag}* YouTube auth token invalid; starting login flow")
                 self._prompt_for_oauth(creds, auth_file)
-                self.client = YTMusic(str(auth_file), oauth_credentials=creds)
-        else:
-            self.client = YTMusic(str(auth_file))
+                self._oauth_client = YTMusic(str(auth_file), oauth_credentials=creds)
+        logger.info(f"{self.tag}* logged in")
+
+    def _validate_browser_auth(self, client: YTMusic) -> bool:
+        """Check whether browser cookies are still valid by hitting the browse endpoint."""
+        try:
+            response = client._send_request("browse", {"browseId": "UCMDQxm7cUx3yXkFeHa5zrBA"})
+        except YTMusicServerError as exc:
+            logger.warning(f"{self.tag}* browser auth validation failed (server error): {exc}")
+            return False
+        except requests.RequestException as exc:
+            logger.warning(f"{self.tag}* browser auth validation failed (network error): {exc}")
+            return False
+        # A successful authenticated response includes tracking params with
+        # logged_in=1. The response body structure varies by account type
+        # (brand/creator accounts get a different format), so we only check
+        # that the server accepted our auth — not that parsing succeeds.
+        tracking = response.get("responseContext", {}).get("serviceTrackingParams", [])
+        for service in tracking:
+            for param in service.get("params", []):
+                if param.get("key") == "logged_in" and param.get("value") == "1":
+                    return True
+        logger.warning(f"{self.tag}* browser auth validation failed: not logged in")
+        return False
+
+    _BROWSER_AUTH_INSTRUCTIONS = (
+        "Browser cookie auth is required to browse YouTube Music artist pages.\n"
+        "\n"
+        "To get your raw request headers:\n"
+        "  1. Open https://music.youtube.com in Firefox or Chrome\n"
+        "  2. Make sure you are logged in\n"
+        "  3. Open DevTools (F12) → Network tab\n"
+        "  4. Click on any request to music.youtube.com\n"
+        "  5. Right-click the request → Copy → Copy Request Headers (raw)\n"
+        "     The raw headers look like 'key: value' pairs, one per line.\n"
+        "\n"
+        "Paste the raw headers below, then press Enter followed by Ctrl-D (EOF).\n"
+        "\n"
+        "Tip: if pasting stalls in your terminal, copy the headers to your\n"
+        "clipboard and use the env var instead:\n"
+        '  export YTMUSIC_HEADERS_RAW="$(pbpaste)" && shuffleupagus\n'
+    )
+
+    def _setup_browser_auth(self, auth_file: Path) -> bool:
+        """Walk the user through browser cookie setup. Returns True on success."""
+        headers_raw = os.environ.get("YTMUSIC_HEADERS_RAW")
+        try:
+            if headers_raw:
+                ytmusicapi.setup(filepath=str(auth_file), headers_raw=headers_raw)
+            elif sys.stdin.isatty():
+                print(self._BROWSER_AUTH_INSTRUCTIONS)
+                ytmusicapi.setup(filepath=str(auth_file))
+            else:
+                logger.error(
+                    f"{self.tag}* browser cookies expired and stdin is not"
+                    " a TTY — set YTMUSIC_HEADERS_RAW or re-run interactively"
+                )
+                return False
+        except Exception:
+            logger.exception(f"{self.tag}* browser auth setup failed")
+            return False
+        return True
 
     def _load_oauth_token(self, auth_file: Path) -> dict | None:
         """Return token dict if file exists and looks like an OAuth token, else None."""
@@ -71,10 +200,32 @@ class YoutubeService(Service):
 
     def _get_access_token(self) -> str | None:
         """Return the current OAuth access token, auto-refreshing if needed. None if not OAuth."""
-        token = getattr(self.client, "_token", None)
+        client = self._oauth_client or self.client
+        token = getattr(client, "_token", None)
         if token is not None:
             return token.access_token
         return None
+
+    def _check_api_response(self, resp: requests.Response) -> None:
+        """Raise RuntimeError with details for YouTube API errors."""
+        if resp.status_code in (403, 429):
+            # An error body is not guaranteed to be JSON — a proxy or gateway can
+            # answer with HTML, and a truncated response fails to parse. Treat any
+            # parse failure as an empty body so the status/resp.text path below
+            # still reports the real HTTP failure instead of a JSONDecodeError.
+            try:
+                body = resp.json() if resp.content else {}
+            except ValueError:
+                body = {}
+            if not isinstance(body, dict):
+                body = {}
+            reason = ""
+            for err in body.get("error", {}).get("errors", []):
+                reason = err.get("reason", "")
+            if reason in ("quotaExceeded", "rateLimitExceeded"):
+                raise RuntimeError(f"YouTube API quota exceeded ({reason}). Quota resets at midnight Pacific Time.")
+            raise RuntimeError(f"YouTube API {resp.status_code}: {reason or resp.text}")
+        resp.raise_for_status()
 
     def _data_api_get(self, url: str, params: dict) -> dict:
         """Authenticated GET to YouTube Data API v3."""
@@ -82,7 +233,7 @@ class YoutubeService(Service):
         if not access_token:
             raise ValueError("YouTube Data API v3 requires OAuth authentication")
         resp = requests.get(url, headers={"Authorization": f"Bearer {access_token}"}, params=params, timeout=30)
-        resp.raise_for_status()
+        self._check_api_response(resp)
         return resp.json()
 
     def _data_api_post(self, url: str, body: dict, params: dict | None = None) -> dict:
@@ -97,7 +248,7 @@ class YoutubeService(Service):
             params=params or {},
             timeout=30,
         )
-        resp.raise_for_status()
+        self._check_api_response(resp)
         return resp.json()
 
     def _data_api_delete(self, url: str, params: dict) -> None:
@@ -106,13 +257,18 @@ class YoutubeService(Service):
         if not access_token:
             raise ValueError("YouTube Data API v3 requires OAuth authentication")
         resp = requests.delete(url, headers={"Authorization": f"Bearer {access_token}"}, params=params, timeout=30)
-        resp.raise_for_status()
-
-    def close(self):
-        self.cache.save()
+        self._check_api_response(resp)
 
     def sanitize_id(self, id: str) -> str:
-        if id.startswith(("http", "youtube.com", "www.youtube.com")):
+        """Normalize a user-supplied YouTube reference to a bare ID or @handle.
+
+        Deliberately NOT the same as youtube.model.sanitize_id(), which strips
+        the "youtube:"/"artist:"/"album:"/"track:" prefixes carried by cached
+        model IDs. This one understands youtube.com URLs and @handles, which is
+        what users actually paste into the config. Editing one does not change
+        the other — pick the one matching the input you have.
+        """
+        if id.startswith(("http://", "https://", "youtube.com", "www.youtube.com")):
             url = id.removeprefix("https://").removeprefix("http://").removeprefix("www.")
             if url.startswith("youtube.com/@"):
                 return "@" + url.removeprefix("youtube.com/@").split("?")[0].split("/")[0]
@@ -137,7 +293,7 @@ class YoutubeService(Service):
 
         artist_url = "https://www.youtube.com/" + artist if artist.startswith("@") else artist
 
-        logger.debug(f"* fetching channel ID for artist handle: {artist} (URL: {artist_url})")
+        logger.info(f"{self.tag}* resolving artist handle: {artist}")
         response = requests.get(artist_url, timeout=30)
         if response.status_code < 200 or response.status_code >= 300:
             raise ValueError(
@@ -161,11 +317,12 @@ class YoutubeService(Service):
             if m:
                 handle = m.group(1)  # e.g. "/@artistname"
 
-        self.cache.write("channel:" + artist, channel_id)
+        permanent = 60 * 60 * 24 * 365 * 10.0  # ~10 years
+        self.cache.write("channel:" + artist, channel_id, ttl=permanent)
         if handle:
-            self.cache.write("channel:handle:" + channel_id, handle)
+            self.cache.write("channel:handle:" + channel_id, handle, ttl=permanent)
 
-        logger.debug(f"* resolved {artist} to channel ID: {channel_id} (handle: {handle})")
+        logger.debug(f"{self.tag}* resolved {artist} to channel ID: {channel_id} (handle: {handle})")
         return channel_id, handle
 
     def get_artist(self, artist: str | Artist) -> YoutubeArtist | None:
@@ -174,7 +331,7 @@ class YoutubeService(Service):
             try:
                 artist_id, handle = self.__get_channel_id(artist)
             except ValueError as e:
-                logger.warning(f"* could not resolve artist handle '{original}': {e}, skipping")
+                logger.warning(f"{self.tag}* could not resolve artist handle '{original}': {e}, skipping")
                 return None
             artist_obj = None
         else:
@@ -187,7 +344,7 @@ class YoutubeService(Service):
             raise ValueError("Artist ID is missing")
 
         cache_key = "artist:" + artist_id
-        logger.debug(f"* fetching artist info for ID: {artist_id} (cache key: {cache_key})")
+        logger.debug(f"{self.tag}* fetching artist info for ID: {artist_id} (cache key: {cache_key})")
         ret = self.cache.read(cache_key)
         if not ret:
             if artist_obj:
@@ -198,13 +355,13 @@ class YoutubeService(Service):
                 except (KeyError, YTMusicServerError) as e:
                     if "400" in str(e):
                         logger.warning(
-                            f"* {original} (channel: {artist_id}): YouTube Music API returned "
-                            f"HTTP 400 — this artist is not cached and OAuth cannot browse YT Music. "
-                            f"Re-run once with browser-cookie auth to warm the cache.",
+                            f"{self.tag}* {original} (channel: {artist_id}): YouTube Music API returned "
+                            f"HTTP 400 — this artist may not have a YouTube Music page, or your "
+                            f"browser cookies may lack access to browse artist pages.",
                         )
                     else:
                         logger.warning(
-                            f"* {original} has no YouTube Music page ({e}), skipping (channel: {artist_id})",
+                            f"{self.tag}* {original} has no YouTube Music page ({e}), skipping (channel: {artist_id})",
                         )
                     return None
                 self.cache.write(cache_key, ret)
@@ -219,7 +376,14 @@ class YoutubeService(Service):
         cache_key = "album:" + album_id
         ret = self.cache.read(cache_key)
         if not ret:
-            ret = self.client.get_album(album_id)
+            try:
+                ret = self.client.get_album(album_id)
+            except (KeyError, YTMusicServerError) as e:
+                if "400" in str(e):
+                    raise ValueError(
+                        f"YouTube Music API returned HTTP 400 for album {album_id}",
+                    ) from e
+                raise
             self.cache.write(cache_key, ret)
 
         return YoutubeAlbum.from_dict(ret)
@@ -232,7 +396,7 @@ class YoutubeService(Service):
         albums_browse_id = artist.browseIds.get("albums")
         albums_params = artist.params.get("albums")
 
-        logger.debug(f"* fetching albums for artist ID: {artist.id} (cache key: {cache_key})")
+        logger.debug(f"{self.tag}* fetching albums for artist ID: {artist.id} (cache key: {cache_key})")
         albums = []
 
         ret = self.cache.read(cache_key)
@@ -246,20 +410,25 @@ class YoutubeService(Service):
             if stale is not None and current_fp is not None:
                 cached_fp = self.cache.read_stale(fp_key)
                 if cached_fp == current_fp:
-                    logger.debug(f"* fingerprint match for {artist.name}, extending cache")
+                    logger.debug(f"{self.tag}* fingerprint match for {artist.name}, extending cache")
                     self.cache.touch(cache_key)
                     self.cache.write(fp_key, current_fp, ttl=_FINGERPRINT_TTL)
                     ret = stale
 
         if ret is None:
             if albums_browse_id is not None and albums_params is not None:
-                # artist has a paginated album list; fetch all
-                ret = self.client.get_artist_albums(albums_browse_id, albums_params, limit=100)
+                try:
+                    ret = self.client.get_artist_albums(albums_browse_id, albums_params, limit=100)
+                except (KeyError, YTMusicServerError) as e:
+                    logger.warning(
+                        f"{self.tag}* HTTP error fetching album list for {artist.name}: {e}",
+                    )
+                    return []
             elif artist.inlineAlbums:
                 # all albums are already embedded in the get_artist response
                 ret = artist.inlineAlbums
             else:
-                logger.debug(f"* artist {artist.name} has no albums, skipping")
+                logger.debug(f"{self.tag}* artist {artist.name} has no albums, skipping")
                 return []
             self.cache.write(cache_key, ret)
             inline = artist.inlineAlbums
@@ -276,7 +445,20 @@ class YoutubeService(Service):
         cache_key = "album:" + album.id
         ret = self.cache.read(cache_key)
         if not ret:
-            ret = self.client.get_album(album.id)
+            try:
+                ret = self.client.get_album(album.id)
+            except (KeyError, YTMusicServerError) as e:
+                # Report what actually failed. A blanket "HTTP 400" here hid
+                # quota and auth errors behind a routine "album not found".
+                if "400" in str(e):
+                    logger.warning(
+                        f"{self.tag}* album '{album.name}' ({album.id}) is not on YouTube Music, skipping",
+                    )
+                else:
+                    logger.warning(
+                        f"{self.tag}* error fetching album '{album.name}' ({album.id}): {e}, skipping",
+                    )
+                return []
             self.cache.write(cache_key, ret)
 
         tracks: list[Track] = []
@@ -303,10 +485,15 @@ class YoutubeService(Service):
             return []
 
         tracks: list[Track] = []
-        with ThreadPoolExecutor(max_workers=8) as executor:
-            futures = {executor.submit(self.get_album_tracks, album): album for album in albums}
-            for future in as_completed(futures):
+        futures = {self.album_pool.submit(self.get_album_tracks, album): album for album in albums}
+        for future in as_completed(futures):
+            album = futures[future]
+            try:
                 tracks += future.result()
+            except Exception:
+                logger.exception(
+                    f"{self.tag}  ! error fetching tracks for album '{album.name}' (artist: {artist.name}), skipping"
+                )
 
         return tracks
 
@@ -330,38 +517,73 @@ class YoutubeService(Service):
                 break
         raise ValueError(f"Playlist not found: {playlist_name}")
 
-    def sync(self, playlist_name: str, tracks: list[str] | None = None):
-        playlist_id = self.get_playlist_id_for_name(playlist_name)
-
-        # Fetch existing playlist items via Data API v3
-        existing_item_ids: list[str] = []
+    def __get_playlist_items(self, playlist_id: str, part: str) -> list[dict]:
+        """Read every playlistItems entry for a playlist, following pagination."""
+        items: list[dict] = []
         page_token = None
         while True:
-            params: dict = {"part": "id", "playlistId": playlist_id, "maxResults": 50}
+            params: dict = {"part": part, "playlistId": playlist_id, "maxResults": 50}
             if page_token:
                 params["pageToken"] = page_token
             data = self._data_api_get("https://www.googleapis.com/youtube/v3/playlistItems", params)
-            existing_item_ids.extend(item["id"] for item in data.get("items", []))
+            items.extend(data.get("items", []))
             page_token = data.get("nextPageToken")
             if not page_token:
                 break
+        return items
 
-        logger.debug(f"  * removing {len(existing_item_ids)} existing items from playlist")
+    def __add_video(self, playlist_id: str, video_id: str) -> None:
+        self._data_api_post(
+            "https://www.googleapis.com/youtube/v3/playlistItems",
+            params={"part": "snippet"},
+            body={
+                "snippet": {
+                    "playlistId": playlist_id,
+                    "resourceId": {"kind": "youtube#video", "videoId": video_id},
+                }
+            },
+        )
+
+    def __verify_playlist(self, playlist_id: str, expected_ids: list[str]) -> None:
+        """Confirm every video reached the playlist, re-adding any that did not."""
+        expected = set(expected_ids)
+        for round_num in range(self._MAX_VERIFY_ROUNDS + 1):
+            actual = {
+                item["contentDetails"]["videoId"]
+                for item in self.__get_playlist_items(playlist_id, "contentDetails")
+                if item.get("contentDetails", {}).get("videoId")
+            }
+            missing = expected - actual
+            if not missing:
+                logger.info(f"{self.tag}  * verified {len(expected)} tracks in playlist")
+                return
+            if round_num == self._MAX_VERIFY_ROUNDS:
+                raise RuntimeError(
+                    f"{len(missing)} tracks could not be verified in the YouTube playlist "
+                    f"after {self._MAX_VERIFY_ROUNDS} re-add rounds: {sorted(missing)}"
+                )
+            logger.warning(
+                f"{self.tag}  ! {len(missing)} tracks missing after sync, "
+                f"re-adding (round {round_num + 1}/{self._MAX_VERIFY_ROUNDS})"
+            )
+            for video_id in sorted(missing):
+                self.__add_video(playlist_id, video_id)
+
+    def sync(self, playlist_name: str, tracks: list[str] | None = None):
+        playlist_id = self.get_playlist_id_for_name(playlist_name)
+
+        existing_item_ids = [item["id"] for item in self.__get_playlist_items(playlist_id, "id")]
+        logger.debug(f"{self.tag}  * removing {len(existing_item_ids)} existing items from playlist")
         for item_id in existing_item_ids:
             self._data_api_delete(
                 "https://www.googleapis.com/youtube/v3/playlistItems",
                 params={"id": item_id},
             )
 
-        logger.debug(f"  * adding {len(tracks or [])} new items to playlist")
-        for video_id in tracks or []:
-            self._data_api_post(
-                "https://www.googleapis.com/youtube/v3/playlistItems",
-                params={"part": "snippet"},
-                body={
-                    "snippet": {
-                        "playlistId": playlist_id,
-                        "resourceId": {"kind": "youtube#video", "videoId": video_id},
-                    }
-                },
-            )
+        expected_ids = list(tracks or [])
+        logger.debug(f"{self.tag}  * adding {len(expected_ids)} new items to playlist")
+        for video_id in expected_ids:
+            self.__add_video(playlist_id, video_id)
+
+        if expected_ids:
+            self.__verify_playlist(playlist_id, expected_ids)
