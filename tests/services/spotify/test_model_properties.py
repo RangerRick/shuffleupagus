@@ -102,3 +102,58 @@ def test_sanitize_url_extracts_last_path_segment(raw):
 def test_sanitize_plain_id_unchanged(id_):
     """A plain ID with no prefix or URL is returned unchanged."""
     assert sanitize_id(id_) == id_
+
+
+# ---------------------------------------------------------------------------
+# URL scheme precision and malformed input
+# ---------------------------------------------------------------------------
+
+# Scheme look-alikes. Only "http://" and "https://" mark a URL, so these must
+# pass through untouched — a bare startswith("http") check would mangle them.
+_not_a_url = st.builds(
+    lambda scheme, id_: f"{scheme}{id_}",
+    scheme=st.sampled_from(["httpd://", "ftp://", "sftp://", "http:", "https:", "http", "//", "HTTP://"]),
+    id_=_plain_id,
+)
+
+
+@given(raw=_not_a_url)
+def test_non_http_scheme_is_left_alone(raw):
+    """Only http:// and https:// are URLs; look-alikes keep their full text."""
+    assert sanitize_id(raw) == raw
+
+
+@given(raw=st.text())
+def test_sanitize_never_raises_on_arbitrary_text(raw):
+    """sanitize_id handles any string without raising."""
+    sanitize_id(raw)
+
+
+_messy_url = st.builds(
+    lambda base, userinfo, port, id_, query: f"{base}{userinfo}x.com{port}/{id_}{query}",
+    base=st.sampled_from(["https://", "http://"]),
+    userinfo=st.sampled_from(["", "user:pass@"]),
+    port=st.sampled_from(["", ":8080"]),
+    id_=_plain_id,
+    query=st.sampled_from(["", "?si=abc", "?a=1&b=2"]),
+)
+
+
+@given(raw=_messy_url)
+def test_messy_url_yields_bare_id(raw):
+    """Userinfo, ports, and query strings do not leak into the extracted ID."""
+    result = sanitize_id(raw)
+    assert "?" not in result
+    assert "/" not in result
+    assert "@" not in result
+    assert ":" not in result
+
+
+def test_doubled_prefix_strips_only_one_layer():
+    """Documented limitation: prefix stripping is single-pass, not repeated.
+
+    No real Spotify input carries a doubled prefix, so this is recorded as
+    actual behaviour rather than fixed — do not write an idempotence test over
+    arbitrary text, it will fail on inputs like this one.
+    """
+    assert sanitize_id("spotify:spotify:abc") == "spotify:abc"

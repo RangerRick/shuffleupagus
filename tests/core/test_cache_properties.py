@@ -20,15 +20,48 @@ def _make_cache(tmp_dir: str, name: str = "test", cutoff: float = CACHE_DEFAULT_
     return c
 
 
-# Values that JSON can round-trip without issue.
-_serializable = st.one_of(
+# Strings that stress JSON quoting: embedded quotes, backslashes, control
+# characters, non-BMP emoji, combining marks, and zero-width joiners.
+_awkward_text = st.one_of(
+    st.text(),
+    st.sampled_from(
+        [
+            '"',
+            "\\",
+            '\\"',
+            "\n\r\t",
+            "\x00",
+            "\0embedded null",
+            "line1\nline2",
+            "🎵",
+            "👨‍👩‍👧",  # ZWJ sequence
+            "é",  # combining acute accent
+            "\u200b",  # zero-width space
+            "﻿",  # BOM
+            "'; DROP TABLE cache; --",
+            '{"not": "json"}',
+        ]
+    ),
+)
+
+# Scalars JSON round-trips exactly. Floats exclude nan/inf, which JSON cannot
+# represent. Integers go past 2**53 to catch precision loss.
+_scalar = st.one_of(
     st.none(),
     st.booleans(),
-    st.integers(),
+    st.integers(min_value=-(2**70), max_value=2**70),
     st.floats(allow_nan=False, allow_infinity=False),
-    st.text(),
-    st.lists(st.integers()),
-    st.dictionaries(st.text(), st.integers()),
+    _awkward_text,
+)
+
+# Nested, heterogeneous containers — dicts of lists of dicts, mixed-type lists.
+_serializable = st.recursive(
+    _scalar,
+    lambda children: st.one_of(
+        st.lists(children, max_size=5),
+        st.dictionaries(_awkward_text, children, max_size=5),
+    ),
+    max_leaves=15,
 )
 
 _key = st.text(min_size=1)
