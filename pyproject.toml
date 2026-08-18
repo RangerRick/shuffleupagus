@@ -120,7 +120,7 @@ filterwarnings = ["error"]
 [tool.coverage.report]
 fail_under = 80
 
-# Per-module floors, enforced by scripts/check_per_module_coverage.sh. The
+# Per-module floors, enforced by scripts/check_per_module_coverage.py. The
 # aggregate fail_under above is a whole-project number, so one module can rot
 # while another carries it. These are the ratchet: raise a floor when a module
 # improves, never lower one to make a red run green.
