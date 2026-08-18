@@ -5,21 +5,21 @@ repos:
         name: ruff check
         language: system
         entry: uv run ruff check
-        args: [src/]
+        args: [src/, tests/]
         pass_filenames: false
 
       - id: ruff-format
         name: ruff format
         language: system
         entry: uv run ruff format --check
-        args: [src/]
+        args: [src/, tests/]
         pass_filenames: false
 
       - id: ty
         name: ty check
         language: system
         entry: uv run ty check
-        args: [src/]
+        args: [src/, tests/]
         pass_filenames: false
 
       - id: pytest-coverage

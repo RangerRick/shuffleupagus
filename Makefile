@@ -4,12 +4,12 @@ dev:
 	uv sync --all-groups
 
 lint:
-	uv run ruff check src/
-	uv run ty check src/
+	uv run ruff check src/ tests/
+	uv run ty check src/ tests/
 
 format:
-	uv run ruff format src/
-	uv run ruff check --fix src/
+	uv run ruff format src/ tests/
+	uv run ruff check --fix src/ tests/
 
 test:
 	uv run pytest

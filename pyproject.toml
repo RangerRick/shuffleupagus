@@ -27,10 +27,10 @@ build-backend = "uv_build"
 [dependency-groups]
 dev = [
   "hypothesis>=6.165.3",
-  "pytest",
-  "pytest-cov",
-  "ruff",
-  "ty",
+  "pytest>=9.1.1",
+  "pytest-cov>=7.1.0",
+  "ruff>=0.16.3",
+  "ty>=0.0.72",
 ]
 
 [tool.ruff]
@@ -61,6 +61,8 @@ ignore = [
   "PLR1722",# exit vs sys.exit — minor
   "PLR2004",# magic values — acceptable for HTTP status codes
   "PLR0913",# too many args — existing signatures
+  "PLR0917",# too many positional args — positional-only variant of PLR0913
+  "CPY001", # copyright notice — this repo intentionally has no file headers
   "S101",   # assert — used intentionally
   "S113",   # requests without timeout — has timeout in Data API helpers
   "BLE001", # blind except — some intentional broad catches
@@ -77,6 +79,7 @@ ignore = [
   "ARG002", # unused method argument — abstract method stubs
   "EXE002", # shebang — not relevant for a package module
   "TC001",  # type-checking imports — gradual adoption
+  "TC003",  # stdlib type-checking imports — same gradual adoption as TC001
   "PLW0108",# unnecessary lambda — existing style
   "N818",   # exception naming — not using custom exceptions
   "N815",   # mixedCase class attributes — existing naming convention
@@ -95,6 +98,12 @@ ignore = [
 
 [tool.ruff.format]
 quote-style = "double"
+
+[tool.pyright]
+extraPaths = ["src"]
+venvPath = "."
+venv = ".venv"
+pythonVersion = "3.14"
 
 [tool.ty.environment]
 python-version = "3.14"

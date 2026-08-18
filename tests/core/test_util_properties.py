@@ -65,7 +65,7 @@ def _call_spread(playlists, vip_ids=None):
 # ---------------------------------------------------------------------------
 
 
-@given(playlists=artist_playlists(min_artists=1))  # type: ignore[call-arg]  # ty doesn't understand @st.composite
+@given(playlists=artist_playlists(min_artists=1))
 @settings(max_examples=100)
 def test_output_is_subset_of_input_ids(playlists):
     """Every ID in the output was present in some artist's playlist."""
@@ -74,7 +74,7 @@ def test_output_is_subset_of_input_ids(playlists):
     assert set(result).issubset(all_input_ids)
 
 
-@given(playlists=artist_playlists(min_artists=1))  # type: ignore[call-arg]
+@given(playlists=artist_playlists(min_artists=1))
 @settings(max_examples=100)
 def test_output_has_no_duplicate_ids(playlists):
     """The output list contains no repeated track IDs."""
@@ -82,7 +82,7 @@ def test_output_has_no_duplicate_ids(playlists):
     assert len(result) == len(set(result))
 
 
-@given(playlists=artist_playlists(min_artists=1))  # type: ignore[call-arg]
+@given(playlists=artist_playlists(min_artists=1))
 @settings(max_examples=100)
 def test_output_preserves_all_tracks_when_zero_offset(playlists):
     """With offset forced to 0, every input track appears in the output."""
@@ -96,7 +96,7 @@ def test_empty_input_returns_empty_list():
     assert spread_artist_playlists({}, []) == []
 
 
-@given(playlists=artist_playlists(min_artists=2, max_artists=4))  # type: ignore[call-arg]
+@given(playlists=artist_playlists(min_artists=2, max_artists=4))
 @settings(max_examples=50)
 def test_output_is_a_list_of_strings(playlists):
     """The output is always a list of strings (track IDs)."""
@@ -107,7 +107,7 @@ def test_output_is_a_list_of_strings(playlists):
 
 
 @given(
-    regular_playlists=artist_playlists(min_artists=1, max_artists=3),  # type: ignore[call-arg]
+    regular_playlists=artist_playlists(min_artists=1, max_artists=3),
     vip_tracks=st.lists(_track_id, min_size=1, max_size=5, unique=True),
 )
 @settings(max_examples=50)

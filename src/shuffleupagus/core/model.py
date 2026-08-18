@@ -3,7 +3,9 @@ import random
 import string
 import time
 import unicodedata
+from collections.abc import Sequence
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from typing import Any
 
 from .cache import CACHE_DEFAULT_CUTOFF, Cache
 from .config import Config
@@ -33,7 +35,7 @@ class ShufObject:
         return id
 
     @staticmethod
-    def from_dict(obj: any):  # type: ignore
+    def from_dict(obj: Any):
         raise NotImplementedError
 
 
@@ -84,7 +86,7 @@ class Track(ShufObject):
         duration_ms: int,
         isrc: str | None = None,
         album: Album | None = None,
-        artists: list[Artist] | None = None,
+        artists: Sequence[Artist] | None = None,
     ):
         super().__init__(id, name)
         self.duration_ms = duration_ms

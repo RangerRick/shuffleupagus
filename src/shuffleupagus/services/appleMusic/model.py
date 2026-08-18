@@ -1,3 +1,5 @@
+from collections.abc import Sequence
+
 from ...core.model import Album, Artist, Track
 
 
@@ -50,7 +52,7 @@ class AppleMusicTrack(Track):
         duration_ms: int,
         isrc: str,
         album: Album | None = None,
-        artists: list[Artist] | None = None,
+        artists: Sequence[Artist] | None = None,
     ):
         super().__init__(id=id, name=name, duration_ms=duration_ms, isrc=isrc, album=album, artists=artists)
 
@@ -59,7 +61,7 @@ class AppleMusicTrack(Track):
         return sanitize_id(id)
 
     @staticmethod
-    def from_dict(obj, album: Album | None = None, artists: list[Artist] | None = None):
+    def from_dict(obj, album: Album | None = None, artists: Sequence[Artist] | None = None):
         return AppleMusicTrack(
             id=obj["id"],
             name=obj["attributes"]["name"],
