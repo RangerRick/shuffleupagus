@@ -76,6 +76,7 @@ def test_spotify_track_from_dict_full():
     assert t.name == "My Track"
     assert t.duration_ms == 240_000
     assert t.isrc == "USRC12345678"
+    assert t.album is not None
     assert t.album.id == "alb1"
     assert len(t.artists) == 1
     assert t.artists[0].name == "Artist 1"

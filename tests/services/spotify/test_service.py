@@ -45,13 +45,17 @@ def svc(tmp_path, monkeypatch):
     config_mock = MagicMock()
     config_mock.service.return_value = {"cache-ttl-days": None}
     svc = SpotifyService.__new__(SpotifyService)
-    svc.cache = Cache("spotify")
+    cache = Cache("spotify")
+    svc.cache = cache
     svc.config = {}
     svc.spotify = MagicMock()
     svc._api_lock = threading.Lock()
     svc._rate_limited = None
     svc.tag = "[spotify] "
-    return svc
+    yield svc
+    # Close the cache this fixture built, not svc.cache — a test may have swapped
+    # svc.cache for a mock, which would orphan the real sqlite connection.
+    cache.close()
 
 
 # ---------------------------------------------------------------------------
@@ -538,7 +542,7 @@ def test_close_saves_cache(svc):
 def test_get_artist_none_id_raises(svc):
     """Artist object with None id raises ValueError."""
     # Deliberately invalid: exercises the runtime guard, so the type error is the point.
-    obj = Artist(None, "Name")  # ty: ignore[invalid-argument-type]
+    obj = Artist(None, "Name")  # ty: ignore[invalid-argument-type]  # pyright: ignore[reportArgumentType]
     with pytest.raises(ValueError, match="Artist ID is missing"):
         svc.get_artist(obj)
 

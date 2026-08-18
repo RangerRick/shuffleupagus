@@ -7,7 +7,11 @@ import pytest
 import requests
 
 from shuffleupagus.core.cache import Cache
-from shuffleupagus.services.appleMusic.service import AppleMusicService, _applescript_str
+from shuffleupagus.services.appleMusic.service import (
+    AppleMusicService,
+    _applescript_count,
+    _applescript_str,
+)
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -46,13 +50,17 @@ def _track_response(id="t1", name="Track", duration_ms=180_000, isrc="USRC000000
 def svc(tmp_path, monkeypatch):
     monkeypatch.setattr(Cache, "_db_path", lambda self: str(tmp_path / f"{self.name}.db"))
     s = AppleMusicService.__new__(AppleMusicService)
-    s.cache = Cache("appleMusic")
+    cache = Cache("appleMusic")
+    s.cache = cache
     s.config = {"media-user-token": "tok"}
     s.client = MagicMock()
     s.client.proxies = {}
     s.client.session_length = 30
     s.tag = "[apple] "
-    return s
+    yield s
+    # Close the cache this fixture built, not s.cache — a test may have swapped
+    # s.cache for a mock, which would orphan the real sqlite connection.
+    cache.close()
 
 
 # ---------------------------------------------------------------------------
@@ -707,6 +715,27 @@ def test_clear_playlist_polls_until_zero(svc):
     assert scripts[1].run.call_count == 3
 
 
+def test_clear_playlist_gives_up_when_count_never_drops(svc):
+    """A count that never reaches zero raises instead of polling forever."""
+    scripts = []
+
+    def make_script(*_args, **_kwargs):
+        mock = MagicMock()
+        scripts.append(mock)
+        mock.run.return_value = None if len(scripts) == 1 else 7
+        return mock
+
+    with (
+        patch(
+            "shuffleupagus.services.appleMusic.service.applescript.AppleScript",
+            side_effect=make_script,
+        ),
+        patch("shuffleupagus.services.appleMusic.service.time.sleep"),
+        pytest.raises(RuntimeError, match="still reports 7 tracks"),
+    ):
+        svc._AppleMusicService__clear_playlist("Test")
+
+
 # ---------------------------------------------------------------------------
 # __add_tracks re-queue
 # ---------------------------------------------------------------------------
@@ -790,6 +819,17 @@ def test_applescript_str_leaves_plain_text_alone():
 def test_applescript_str_rejects_line_breaks(bad):
     with pytest.raises(ValueError, match="line break"):
         _applescript_str(bad)
+
+
+@pytest.mark.parametrize("raw, expected", [(7, 7), (7.0, 7), (0, 0)])
+def test_applescript_count_accepts_numeric_results(raw, expected):
+    assert _applescript_count(raw) == expected
+
+
+@pytest.mark.parametrize("bad", [None, {"count": 3}, [1, 2], "7", True])
+def test_applescript_count_rejects_non_numeric_results(bad):
+    with pytest.raises(TypeError, match="track count"):
+        _applescript_count(bad)
 
 
 def test_clear_playlist_escapes_quoted_name(svc):

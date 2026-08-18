@@ -1,4 +1,5 @@
 from concurrent.futures import ThreadPoolExecutor
+from typing import cast
 
 import pytest
 
@@ -8,6 +9,7 @@ from shuffleupagus.core.model import (
     MAX_TRACK_LENGTH_MS,
     Album,
     Artist,
+    Service,
     ShufObject,
     Track,
 )
@@ -122,13 +124,9 @@ def test_track_is_excluded():
 # --- generate_playlist (via a minimal stub service) ---
 
 
-class _StubTrack(Track):
-    pass
-
-
-def _track(id, name="T", duration_ms=120_000, album_id="alb1"):
+def _track(id, name="T", duration_ms=120_000, album_id="alb1") -> Track:
     album = Album(album_id, "Album")
-    return _StubTrack(id=id, name=name, duration_ms=duration_ms, album=album)
+    return Track(id=id, name=name, duration_ms=duration_ms, album=album)
 
 
 class _StubService:
@@ -137,28 +135,31 @@ class _StubService:
     tag = "[test] "
     artist_pool = ThreadPoolExecutor(max_workers=4)
 
-    def get_artist(self, artist):
+    # Return types are the widest a subclass may narrow to. Without them the
+    # checker infers them from these bodies alone, and every override below
+    # then reads as incompatible.
+    def get_artist(self, artist) -> Artist | None:
         return Artist(artist, artist)
 
-    def get_artist_top_tracks(self, artist):
+    def get_artist_top_tracks(self, artist) -> list[Track]:
         return [_track(f"top-{i}", f"Top {i}") for i in range(7)]
 
-    def get_artist_tracks(self, artist):
+    def get_artist_tracks(self, artist) -> list[Track]:
         return [_track(f"art-{i}", f"Art {i}") for i in range(20)]
 
     def generate_playlist(self, artist_ids, excluded_albums=None, excluded_tracks=None, vip_artist_ids=None):
-        from shuffleupagus.core.model import Service
-
         # Duck-typed on purpose: this stub supplies only what the two Service
         # methods under test actually touch, so it deliberately isn't a Service.
+        # The cast states that intent once instead of suppressing it per call.
+        me = cast("Service", self)
         artist_playlists = Service.collect_tracks(
-            self,  # ty: ignore[invalid-argument-type]
+            me,
             artist_ids=artist_ids,
             excluded_album_ids=excluded_albums or [],
             excluded_track_ids=excluded_tracks or [],
         )
         return Service.generate_playlist(
-            self,  # ty: ignore[invalid-argument-type]
+            me,
             artist_playlists=artist_playlists,
             vip_artist_ids=vip_artist_ids or [],
         )
@@ -181,7 +182,7 @@ def test_generate_playlist_excludes_albums():
     class Svc(_StubService):
         def get_artist_top_tracks(self, artist):
             album = Album("excluded-alb", "Bad Album")
-            return [_StubTrack(id="bad", name="Bad", duration_ms=60_000, album=album)]
+            return [Track(id="bad", name="Bad", duration_ms=60_000, album=album)]
 
         def get_artist_tracks(self, artist):
             return []

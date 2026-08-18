@@ -23,11 +23,15 @@ from shuffleupagus.services.youtube.service import YoutubeService
 def svc(tmp_path, monkeypatch):
     monkeypatch.setattr(Cache, "_db_path", lambda self: str(tmp_path / f"{self.name}.db"))
     s = YoutubeService.__new__(YoutubeService)
-    s.cache = Cache("youtube")
+    cache = Cache("youtube")
+    s.cache = cache
     s.config = {}
     s.client = MagicMock()
     s.tag = "[youtube] "
-    return s
+    yield s
+    # Close the cache this fixture built, not s.cache — a test may have swapped
+    # s.cache for a mock, which would orphan the real sqlite connection.
+    cache.close()
 
 
 def _mock_token(value: str = "test-token") -> MagicMock:
@@ -409,10 +413,12 @@ def browser_svc(tmp_path, monkeypatch):
     """YoutubeService wired for browser-cookie auth (no client_id/secret)."""
     monkeypatch.setattr(Cache, "_db_path", lambda self: str(tmp_path / f"{self.name}.db"))
     s = YoutubeService.__new__(YoutubeService)
-    s.cache = Cache("youtube")
+    cache = Cache("youtube")
+    s.cache = cache
     s.config = {"auth-file": str(tmp_path / "browser_auth.json")}
     s.tag = "[youtube] "
-    return s, tmp_path
+    yield s, tmp_path
+    cache.close()
 
 
 def _valid_browse_response():
@@ -700,10 +706,46 @@ def test_load_oauth_token_missing_file(svc, tmp_path):
     assert svc._load_oauth_token(tmp_path / "missing.json") is None
 
 
+def test_load_oauth_token_missing_file_is_quiet(svc, tmp_path, caplog):
+    with caplog.at_level(logging.DEBUG):
+        assert svc._load_oauth_token(tmp_path / "missing.json") is None
+    assert caplog.text == ""
+
+
 def test_load_oauth_token_invalid_json(svc, tmp_path):
     token_file = tmp_path / "token.json"
     token_file.write_text("not json")
     assert svc._load_oauth_token(token_file) is None
+
+
+@pytest.mark.parametrize("body", ["null", "0", "true", '"a string"', "[1, 2]"])
+def test_load_oauth_token_non_object_json_returns_none(svc, tmp_path, body):
+    """Valid JSON that is not an object is not a token, and must not raise."""
+    token_file = tmp_path / "token.json"
+    token_file.write_text(body)
+    assert svc._load_oauth_token(token_file) is None
+
+
+def test_load_oauth_token_invalid_json_warns_with_path(svc, tmp_path, caplog):
+    token_file = tmp_path / "token.json"
+    token_file.write_text("not json")
+    with caplog.at_level(logging.WARNING):
+        assert svc._load_oauth_token(token_file) is None
+    assert str(token_file) in caplog.text
+    assert caplog.records[0].levelno == logging.WARNING
+
+
+def test_load_oauth_token_unreadable_logs_error_with_path(svc, tmp_path, caplog):
+    token_file = tmp_path / "token.json"
+    token_file.write_text('{"refresh_token":"r","access_token":"a"}')
+    token_file.chmod(0o000)
+    try:
+        with caplog.at_level(logging.ERROR):
+            assert svc._load_oauth_token(token_file) is None
+    finally:
+        token_file.chmod(0o600)
+    assert str(token_file) in caplog.text
+    assert caplog.records[0].levelno == logging.ERROR
 
 
 # ---------------------------------------------------------------------------
@@ -1002,7 +1044,7 @@ def test_get_artist_with_artist_object_handle_attr(svc):
 
 def test_get_artist_with_artist_object_none_id_raises(svc):
     # Deliberately invalid: exercises the runtime guard, so the type error is the point.
-    artist_obj = Artist(None, "Bad")  # ty: ignore[invalid-argument-type]
+    artist_obj = Artist(None, "Bad")  # ty: ignore[invalid-argument-type]  # pyright: ignore[reportArgumentType]
     with pytest.raises(ValueError, match="Artist ID is missing"):
         svc.get_artist(artist_obj)
 

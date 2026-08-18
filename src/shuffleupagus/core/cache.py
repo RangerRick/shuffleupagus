@@ -3,6 +3,7 @@ import os
 import sqlite3
 import threading
 import time
+from typing import Self
 
 CACHE_DEFAULT_CUTOFF = 60 * 60 * 24 * 7 * 1.0  # 1 week
 
@@ -106,3 +107,9 @@ class Cache:
         """
         with self._lock:
             self._conn.close()
+
+    def __enter__(self) -> Self:
+        return self
+
+    def __exit__(self, exc_type, exc_value, traceback) -> None:
+        self.close()
