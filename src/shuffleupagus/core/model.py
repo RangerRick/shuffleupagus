@@ -5,6 +5,7 @@ import time
 import unicodedata
 from collections.abc import Sequence
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from typing import Any
 
 from .cache import CACHE_DEFAULT_CUTOFF, Cache
 from .config import Config
@@ -34,7 +35,7 @@ class ShufObject:
         return id
 
     @staticmethod
-    def from_dict(obj: any):  # type: ignore
+    def from_dict(obj: Any):
         raise NotImplementedError
 
 
