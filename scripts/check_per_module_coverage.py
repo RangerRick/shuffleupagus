@@ -23,14 +23,37 @@ class CoverageError(Exception):
     """The report or the floor config could not be evaluated."""
 
 
+def _read_text(path: Path) -> str:
+    """Read a file, turning every failure into a CoverageError.
+
+    Anything that escapes as a bare traceback exits 1, which this script already
+    uses to mean "a module is below its floor". A crash must not be mistakable
+    for a verdict.
+    """
+    try:
+        return path.read_text(encoding="utf-8")
+    except OSError as exc:
+        raise CoverageError(f"cannot read {path}: {exc}") from exc
+    except UnicodeDecodeError as exc:
+        raise CoverageError(f"{path} is not valid UTF-8: {exc}") from exc
+
+
+def _as_table(value: object, what: str) -> dict:
+    if not isinstance(value, dict):
+        raise CoverageError(f"{what} is not a table: {value!r}")
+    return value
+
+
 def load_floors(pyproject: Path) -> tuple[float, dict[str, float]]:
     """Return (default_floor, {module_path: floor}) from [tool.coverage-floors]."""
+    text = _read_text(pyproject)
     try:
-        data = tomllib.loads(pyproject.read_text())
-    except (OSError, tomllib.TOMLDecodeError) as exc:
+        data = tomllib.loads(text)
+    except tomllib.TOMLDecodeError as exc:
         raise CoverageError(f"cannot read floors from {pyproject}: {exc}") from exc
 
-    table = dict(data.get("tool", {}).get("coverage-floors", {}))
+    tool = _as_table(data.get("tool", {}), f"[tool] in {pyproject}")
+    table = dict(_as_table(tool.get("coverage-floors", {}), f"[tool.coverage-floors] in {pyproject}"))
     default = table.pop("default", DEFAULT_FLOOR)
     floors: dict[str, float] = {}
     for path, floor in table.items():
@@ -44,12 +67,16 @@ def load_floors(pyproject: Path) -> tuple[float, dict[str, float]]:
 
 def load_coverage(report: Path) -> dict[str, float]:
     """Return {module_path: percent_covered} from a coverage.json report."""
+    if not report.exists():
+        raise CoverageError(f"cannot read {report}: run pytest with --cov-report=json:{report} first")
+    text = _read_text(report)
     try:
-        data = json.loads(report.read_text())
-    except OSError as exc:
-        raise CoverageError(f"cannot read {report}: run pytest with --cov-report=json:{report} first") from exc
+        data = json.loads(text)
     except json.JSONDecodeError as exc:
         raise CoverageError(f"{report} is not valid JSON: {exc}") from exc
+
+    if not isinstance(data, dict):
+        raise CoverageError(f"{report} is not a JSON object: found {type(data).__name__}")
 
     files = data.get("files")
     if not isinstance(files, dict):
@@ -59,7 +86,8 @@ def load_coverage(report: Path) -> dict[str, float]:
 
     measured: dict[str, float] = {}
     for path, entry in files.items():
-        percent = (entry or {}).get("summary", {}).get("percent_covered")
+        summary = entry.get("summary") if isinstance(entry, dict) else None
+        percent = summary.get("percent_covered") if isinstance(summary, dict) else None
         if not isinstance(percent, int | float) or isinstance(percent, bool):
             raise CoverageError(f"{report} has a non-numeric coverage for {path}: {percent!r}")
         measured[path] = float(percent)

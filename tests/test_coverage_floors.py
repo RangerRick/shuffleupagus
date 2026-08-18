@@ -131,6 +131,27 @@ def test_non_numeric_coverage_is_an_error(tmp_path):
         cov.load_coverage(_report(tmp_path, {"a.py": _entry(None)}))
 
 
+def test_undecodable_report_is_an_error(tmp_path):
+    path = tmp_path / "coverage.json"
+    path.write_bytes(b"\xff\xfe not utf-8")
+    with pytest.raises(cov.CoverageError, match="not valid UTF-8"):
+        cov.load_coverage(path)
+
+
+@pytest.mark.parametrize("body", ["[1, 2]", '"a string"', "null", "42"])
+def test_report_that_is_not_an_object_is_an_error(tmp_path, body):
+    """Valid JSON that is not an object must not reach .get()."""
+    path = tmp_path / "coverage.json"
+    path.write_text(body)
+    with pytest.raises(cov.CoverageError, match="not a JSON object"):
+        cov.load_coverage(path)
+
+
+def test_report_entry_that_is_not_an_object_is_an_error(tmp_path):
+    with pytest.raises(cov.CoverageError, match="non-numeric"):
+        cov.load_coverage(_report(tmp_path, {"a.py": "not an object"}))
+
+
 # --- load_floors -------------------------------------------------------------
 
 
@@ -156,6 +177,23 @@ def test_non_numeric_floor_is_an_error(tmp_path):
 def test_malformed_pyproject_is_an_error(tmp_path):
     with pytest.raises(cov.CoverageError, match="cannot read floors"):
         cov.load_floors(_pyproject(tmp_path, "[unclosed\n"))
+
+
+def test_undecodable_pyproject_is_an_error(tmp_path):
+    path = tmp_path / "pyproject.toml"
+    path.write_bytes(b"\xff\xfe not utf-8")
+    with pytest.raises(cov.CoverageError, match="not valid UTF-8"):
+        cov.load_floors(path)
+
+
+@pytest.mark.parametrize(
+    "body",
+    ['tool = "not a table"\n', "[tool]\ncoverage-floors = 3\n"],
+)
+def test_pyproject_with_wrong_table_shape_is_an_error(tmp_path, body):
+    """A scalar where a table belongs must not reach .get()."""
+    with pytest.raises(cov.CoverageError, match="not a table"):
+        cov.load_floors(_pyproject(tmp_path, body))
 
 
 # --- exit codes --------------------------------------------------------------
