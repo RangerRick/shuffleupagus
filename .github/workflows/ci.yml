@@ -15,10 +15,6 @@ concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
-env:
-  # uv reads this to pick the interpreter, matching .python-version.
-  UV_PYTHON: "3.14"
-
 # macOS runners, not Linux. This project drives Music.app through AppleScript,
 # so it depends on py-applescript -> pyobjc-core, which refuses to build
 # anywhere else ("PyObjC requires macOS to build"). Installing the project at
