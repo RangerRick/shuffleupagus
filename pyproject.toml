@@ -99,6 +99,12 @@ ignore = [
 [tool.ruff.format]
 quote-style = "double"
 
+[tool.pyright]
+extraPaths = ["src"]
+venvPath = "."
+venv = ".venv"
+pythonVersion = "3.14"
+
 [tool.ty.environment]
 python-version = "3.14"
 
