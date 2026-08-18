@@ -33,13 +33,19 @@ def _applescript_str(value: str) -> str:
 def _applescript_count(result: object) -> int:
     """Coerce an AppleScript track count to int.
 
-    AppleScript results are untyped at this boundary — a script that errors, or
-    that Music.app answers unexpectedly, hands back a dict or None instead of a
-    number. Reject that with the actual value named, rather than letting int()
-    raise on its own and say nothing about where the value came from.
+    AppleScript results are untyped at this boundary. A failing script raises
+    applescript.ScriptError rather than returning a sentinel, so this guards the
+    narrower case of a script that succeeds and answers with something that is
+    not a number. Naming the type beats letting int() raise on its own, which
+    says nothing about where the value came from.
+
+    bool is excluded deliberately: it is a subclass of int, so True would
+    otherwise pass as a count of 1.
     """
     if isinstance(result, bool) or not isinstance(result, int | float):
-        raise TypeError(f"AppleScript returned a non-numeric track count: {result!r}")
+        # Truncated: the result is untrusted and unbounded, and this message
+        # reaches the log.
+        raise TypeError(f"AppleScript returned a non-numeric track count: {type(result).__name__} {result!r:.120}")
     return int(result)
 
 
@@ -375,10 +381,17 @@ class AppleMusicService(Service):
         """
         )
         count = _applescript_count(count_scpt.run())
-        while count > 0:
+        for _ in range(150):
+            if count == 0:
+                break
             time.sleep(2)
             count = _applescript_count(count_scpt.run())
             logger.info(f"{self.tag}    * {count} track(s) remaining...")
+        else:
+            raise RuntimeError(
+                f"Music.app still reports {count} tracks in '{playlist_name}' after 5 minutes. "
+                "Check that Music.app is responsive and is not mid-sync, then retry."
+            )
 
     def __post_batch(self, playlist_id: str, track_ids: list[str]) -> None:
         """POST a single batch of tracks (≤80) with retries."""

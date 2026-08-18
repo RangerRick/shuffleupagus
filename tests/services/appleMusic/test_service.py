@@ -715,6 +715,27 @@ def test_clear_playlist_polls_until_zero(svc):
     assert scripts[1].run.call_count == 3
 
 
+def test_clear_playlist_gives_up_when_count_never_drops(svc):
+    """A count that never reaches zero raises instead of polling forever."""
+    scripts = []
+
+    def make_script(*_args, **_kwargs):
+        mock = MagicMock()
+        scripts.append(mock)
+        mock.run.return_value = None if len(scripts) == 1 else 7
+        return mock
+
+    with (
+        patch(
+            "shuffleupagus.services.appleMusic.service.applescript.AppleScript",
+            side_effect=make_script,
+        ),
+        patch("shuffleupagus.services.appleMusic.service.time.sleep"),
+        pytest.raises(RuntimeError, match="still reports 7 tracks"),
+    ):
+        svc._AppleMusicService__clear_playlist("Test")
+
+
 # ---------------------------------------------------------------------------
 # __add_tracks re-queue
 # ---------------------------------------------------------------------------
