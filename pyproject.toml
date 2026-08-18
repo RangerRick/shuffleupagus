@@ -61,6 +61,8 @@ ignore = [
   "PLR1722",# exit vs sys.exit — minor
   "PLR2004",# magic values — acceptable for HTTP status codes
   "PLR0913",# too many args — existing signatures
+  "PLR0917",# too many positional args — positional-only variant of PLR0913
+  "CPY001", # copyright notice — this repo intentionally has no file headers
   "S101",   # assert — used intentionally
   "S113",   # requests without timeout — has timeout in Data API helpers
   "BLE001", # blind except — some intentional broad catches
@@ -77,6 +79,7 @@ ignore = [
   "ARG002", # unused method argument — abstract method stubs
   "EXE002", # shebang — not relevant for a package module
   "TC001",  # type-checking imports — gradual adoption
+  "TC003",  # stdlib type-checking imports — same gradual adoption as TC001
   "PLW0108",# unnecessary lambda — existing style
   "N818",   # exception naming — not using custom exceptions
   "N815",   # mixedCase class attributes — existing naming convention

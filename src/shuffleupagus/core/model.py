@@ -3,6 +3,7 @@ import random
 import string
 import time
 import unicodedata
+from collections.abc import Sequence
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from .cache import CACHE_DEFAULT_CUTOFF, Cache
@@ -84,7 +85,7 @@ class Track(ShufObject):
         duration_ms: int,
         isrc: str | None = None,
         album: Album | None = None,
-        artists: list[Artist] | None = None,
+        artists: Sequence[Artist] | None = None,
     ):
         super().__init__(id, name)
         self.duration_ms = duration_ms

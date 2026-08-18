@@ -2,6 +2,7 @@ import copy
 import sys
 import threading
 from concurrent.futures import as_completed
+from typing import cast
 
 import requests.adapters
 import spotipy
@@ -63,7 +64,8 @@ class SpotifyService(Service):
         # of being swallowed into a headerless MaxRetryError.
         retry = Retry(total=0, respect_retry_after_header=False)
         adapter = requests.adapters.HTTPAdapter(max_retries=retry)
-        session: requests.Session = self.spotify._session  # type: ignore[assignment]
+        # spotipy declares _session as Session | requests.api, but only ever assigns a Session.
+        session = cast("requests.Session", self.spotify._session)
         session.mount("https://", adapter)
         session.mount("http://", adapter)
         self._acquire_token(creds)
