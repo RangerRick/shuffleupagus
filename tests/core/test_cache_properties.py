@@ -16,7 +16,7 @@ def _make_cache(tmp_dir: str, name: str = "test", cutoff: float = CACHE_DEFAULT_
     path = os.path.join(tmp_dir, f"{name}.db")
     with patch.object(Cache, "_db_path", return_value=path):
         c = Cache(name, cutoff=cutoff)
-    c._db_path = lambda: path  # type: ignore[method-assign]
+    c._db_path = lambda: path  # ty: ignore[invalid-assignment]
     return c
 
 
