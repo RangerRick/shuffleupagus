@@ -718,6 +718,14 @@ def test_load_oauth_token_invalid_json(svc, tmp_path):
     assert svc._load_oauth_token(token_file) is None
 
 
+@pytest.mark.parametrize("body", ["null", "0", "true", '"a string"', "[1, 2]"])
+def test_load_oauth_token_non_object_json_returns_none(svc, tmp_path, body):
+    """Valid JSON that is not an object is not a token, and must not raise."""
+    token_file = tmp_path / "token.json"
+    token_file.write_text(body)
+    assert svc._load_oauth_token(token_file) is None
+
+
 def test_load_oauth_token_invalid_json_warns_with_path(svc, tmp_path, caplog):
     token_file = tmp_path / "token.json"
     token_file.write_text("not json")

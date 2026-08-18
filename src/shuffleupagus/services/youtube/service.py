@@ -188,7 +188,10 @@ class YoutubeService(Service):
         """Return token dict if file exists and looks like an OAuth token, else None."""
         try:
             data = json.loads(auth_file.read_text())
-            if "refresh_token" in data and "access_token" in data:
+            # A truncated or zeroed file parses as null/0/true, and the membership
+            # test below raises TypeError on those. That is the same corruption
+            # the JSONDecodeError branch exists for, arriving through another door.
+            if isinstance(data, dict) and "refresh_token" in data and "access_token" in data:
                 return data
         except FileNotFoundError:
             pass
