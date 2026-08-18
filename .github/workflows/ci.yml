@@ -1,0 +1,96 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+# Least privilege by default. No job here needs more; add per-job overrides
+# rather than widening this.
+permissions:
+  contents: read
+
+# A new push to the same PR supersedes the run in flight.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # uv reads this to pick the interpreter, matching .python-version.
+  UV_PYTHON: "3.14"
+
+jobs:
+  validate:
+    name: lint and types
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+        with:
+          enable-cache: true
+      - run: uv sync --all-groups
+      - run: uv run ruff check src/ tests/
+      - run: uv run ruff format --check src/ tests/
+      - run: uv run ty check src/ tests/
+
+  test:
+    name: tests and coverage
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+        with:
+          enable-cache: true
+      - run: uv sync --all-groups
+      # The aggregate fail_under gate lives in pyproject and fails this step.
+      - name: pytest
+        run: uv run pytest --cov-report=json:coverage.json
+      # Per-module floors, which the aggregate number can hide.
+      - name: per-module coverage floors
+        run: bash scripts/check_per_module_coverage.sh coverage.json
+
+  smoke:
+    name: smoke test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+        with:
+          enable-cache: true
+      # Builds the wheel, installs it into a clean prefix, and runs the real
+      # console script. Deliberately does not depend on `test`: a packaging
+      # break is worth hearing about even while a unit test is red.
+      - run: bash scripts/smoke_test.sh
+
+  workflows:
+    name: workflow audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+        with:
+          enable-cache: true
+      # --offline keeps this from needing a token and from failing on GitHub API
+      # rate limits. It costs the checks that resolve action repos over the
+      # network; the SHA pins above are what those would mostly be checking.
+      - name: zizmor
+        run: uvx zizmor --offline --format plain .github/workflows/
+
+  shell:
+    name: shell scripts
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # shellcheck and shfmt are both preinstalled on ubuntu-latest runners.
+      - run: shellcheck scripts/*.sh
+      - run: shfmt -d scripts/*.sh
