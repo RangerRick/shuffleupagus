@@ -162,8 +162,20 @@ class Service:
     def login(self) -> None:
         raise NotImplementedError
 
+    def _shutdown_pools(self, wait: bool) -> None:
+        """Drop queued work in both pools. Tasks already running are not interrupted."""
+        for pool in (self._artist_pool, self._album_pool):
+            if pool is not None:
+                pool.shutdown(wait=wait, cancel_futures=True)
+
     def close(self) -> None:
-        """Evict expired cache entries, then release the cache connection."""
+        """Shut down the worker pools, evict expired entries, release the connection.
+
+        Pools come down first, and with wait=True: a worker still running would
+        otherwise reach for a cache connection that is already closed. This also
+        stops the pools' non-daemon threads from holding up process exit.
+        """
+        self._shutdown_pools(wait=True)
         self.cache.save()
         self.cache.close()
 
@@ -282,8 +294,12 @@ class Service:
                 artist_playlists[a_id] = playlist
             except RuntimeError as e:
                 fatal_error = e
-                for f in futures:
-                    f.cancel()
+                # Cancelling each future only drops the ones that have not started;
+                # the queued backlog would still run and keep calling an API that
+                # just rate-limited us. cancel_futures drops the whole backlog.
+                # wait=False so the abort is not held up by in-flight calls —
+                # close() shuts the pools down again with wait=True and reaps them.
+                self._shutdown_pools(wait=False)
                 break
             except Exception:
                 logger.exception(f"{self.tag}  ! failed to process artist {artist_id}, skipping")
