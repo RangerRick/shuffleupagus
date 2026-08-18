@@ -98,5 +98,11 @@ class Cache:
         self._clean()
 
     def close(self):
-        """Close the database connection."""
-        self._conn.close()
+        """Close the database connection.
+
+        Takes the same lock as every other operation, so a close racing an
+        in-flight read or write waits for it instead of pulling the connection
+        out from under it and raising ProgrammingError mid-statement.
+        """
+        with self._lock:
+            self._conn.close()

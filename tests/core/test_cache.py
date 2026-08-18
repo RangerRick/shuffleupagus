@@ -190,3 +190,22 @@ def test_close_releases_connection(cache):
     cache.close()
     with pytest.raises(sqlite3.ProgrammingError):
         cache.read("k")
+
+
+def test_close_takes_the_lock(cache):
+    """close() acquires _lock, so it cannot cut into an in-flight statement."""
+    cache.write("k", "v")
+    acquired = []
+    real_lock = cache._lock
+
+    class _TrackingLock:
+        def __enter__(self):
+            acquired.append(True)
+            return real_lock.__enter__()
+
+        def __exit__(self, *args):
+            return real_lock.__exit__(*args)
+
+    cache._lock = _TrackingLock()
+    cache.close()
+    assert acquired, "close() did not take the lock"
