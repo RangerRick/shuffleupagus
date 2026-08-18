@@ -45,7 +45,7 @@ ignore = [
   "ANN",    # type annotations — gradual adoption, not enforced yet
   "T20",    # print — used intentionally for progress output
   "ERA001", # commented-out code — used for reference
-  "FIX002", # TODO comments — tracked in beads, not code
+  "FIX002", # TODO comments
   "TD",     # TODO formatting
   "FBT",    # boolean arg patterns — common in this codebase
   "S311",   # random — used for shuffling, not cryptography

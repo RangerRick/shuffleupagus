@@ -16,11 +16,13 @@ _plain_id = st.text(
     alphabet=st.characters(whitelist_categories=("Lu", "Ll", "Nd"), whitelist_characters="-_"),
 )
 
-_url_base = st.sampled_from([
-    "https://music.apple.com/us/artist/",
-    "https://music.apple.com/us/album/my-album/",
-    "https://music.apple.com/gb/album/title/",
-])
+_url_base = st.sampled_from(
+    [
+        "https://music.apple.com/us/artist/",
+        "https://music.apple.com/us/album/my-album/",
+        "https://music.apple.com/gb/album/title/",
+    ]
+)
 
 _url_path = st.builds(lambda base, id_: f"{base}{id_}", base=_url_base, id_=_plain_id)
 _url_with_query = st.builds(lambda url, p: f"{url}?l=en&{p}", url=_url_path, p=_plain_id)

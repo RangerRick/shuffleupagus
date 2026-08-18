@@ -20,11 +20,13 @@ _prefix = st.sampled_from(["spotify:artist:", "spotify:album:", "spotify:track:"
 
 _url_path = st.builds(
     lambda base, id_: f"{base}{id_}",
-    base=st.sampled_from([
-        "https://open.spotify.com/artist/",
-        "https://open.spotify.com/album/",
-        "https://open.spotify.com/track/",
-    ]),
+    base=st.sampled_from(
+        [
+            "https://open.spotify.com/artist/",
+            "https://open.spotify.com/album/",
+            "https://open.spotify.com/track/",
+        ]
+    ),
     id_=_plain_id,
 )
 

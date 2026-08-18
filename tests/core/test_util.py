@@ -1,4 +1,3 @@
-
 from shuffleupagus.core.model import Album, Track
 from shuffleupagus.core.util import spread_artist_playlists
 

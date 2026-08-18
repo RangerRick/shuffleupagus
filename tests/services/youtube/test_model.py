@@ -9,17 +9,22 @@ from shuffleupagus.services.youtube.model import (
 
 # --- sanitize_id ---
 
-@pytest.mark.parametrize("raw, expected", [
-    ("UCabc123", "UCabc123"),
-    ("youtube:artist:UCabc123", "UCabc123"),
-    ("https://www.youtube.com/channel/UCabc123", "UCabc123"),
-    ("https://music.youtube.com/channel/UCabc123?si=x", "UCabc123"),
-])
+
+@pytest.mark.parametrize(
+    "raw, expected",
+    [
+        ("UCabc123", "UCabc123"),
+        ("youtube:artist:UCabc123", "UCabc123"),
+        ("https://www.youtube.com/channel/UCabc123", "UCabc123"),
+        ("https://music.youtube.com/channel/UCabc123?si=x", "UCabc123"),
+    ],
+)
 def test_sanitize_id(raw, expected):
     assert sanitize_id(raw) == expected
 
 
 # --- YoutubeArtist ---
+
 
 def test_artist_defaults():
     a = YoutubeArtist("UCabc", "Artist Name")
@@ -87,6 +92,7 @@ def test_artist_from_dict_songs_browse_id():
 
 # --- YoutubeAlbum ---
 
+
 def test_album_from_dict_browse_id():
     obj = {"browseId": "MPL123", "title": "My Album", "year": "2021"}
     alb = YoutubeAlbum.from_dict(obj)
@@ -122,6 +128,7 @@ def test_album_year_rejects_wrong_length():
 
 
 # --- YoutubeTrack ---
+
 
 def test_track_from_dict_video_id():
     obj = {"videoId": "vid1", "title": "Song", "duration_seconds": 200}

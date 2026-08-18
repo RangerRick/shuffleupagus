@@ -9,16 +9,21 @@ from shuffleupagus.services.appleMusic.model import (
 
 # --- sanitize_id ---
 
-@pytest.mark.parametrize("raw, expected", [
-    ("123456789", "123456789"),
-    ("https://music.apple.com/us/artist/123456789", "123456789"),
-    ("https://music.apple.com/us/album/my-album/987?l=en", "987"),
-])
+
+@pytest.mark.parametrize(
+    "raw, expected",
+    [
+        ("123456789", "123456789"),
+        ("https://music.apple.com/us/artist/123456789", "123456789"),
+        ("https://music.apple.com/us/album/my-album/987?l=en", "987"),
+    ],
+)
 def test_sanitize_id(raw, expected):
     assert sanitize_id(raw) == expected
 
 
 # --- AppleMusicArtist ---
+
 
 def test_artist_from_dict():
     obj = {"id": "a1", "attributes": {"name": "My Artist"}}
@@ -33,6 +38,7 @@ def test_artist_sanitize_id():
 
 # --- AppleMusicAlbum ---
 
+
 def test_album_from_dict():
     obj = {
         "id": "alb1",
@@ -45,6 +51,7 @@ def test_album_from_dict():
 
 
 # --- AppleMusicTrack ---
+
 
 def _track_obj(id="t1", name="Track", duration_ms=180_000, isrc="USRC00000001"):
     return {
@@ -69,6 +76,7 @@ def test_track_from_dict_minimal():
 
 def test_track_from_dict_with_album_and_artists():
     from shuffleupagus.core.model import Album, Artist
+
     alb = Album("alb1", "A")
     art = Artist("art1", "X")
     t = AppleMusicTrack.from_dict(_track_obj(), album=alb, artists=[art])

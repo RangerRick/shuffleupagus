@@ -16,17 +16,21 @@ _plain_id = st.text(
     alphabet=st.characters(whitelist_categories=("Lu", "Ll", "Nd"), whitelist_characters="-_"),
 )
 
-_prefix = st.sampled_from([
-    "youtube:artist:",
-    "youtube:album:",
-    "youtube:track:",
-    "youtube:",
-])
+_prefix = st.sampled_from(
+    [
+        "youtube:artist:",
+        "youtube:album:",
+        "youtube:track:",
+        "youtube:",
+    ]
+)
 
-_url_base = st.sampled_from([
-    "https://www.youtube.com/channel/",
-    "https://music.youtube.com/channel/",
-])
+_url_base = st.sampled_from(
+    [
+        "https://www.youtube.com/channel/",
+        "https://music.youtube.com/channel/",
+    ]
+)
 
 _url_path = st.builds(lambda base, id_: f"{base}{id_}", base=_url_base, id_=_plain_id)
 _url_with_query = st.builds(lambda url, p: f"{url}?si={p}", url=_url_path, p=_plain_id)
