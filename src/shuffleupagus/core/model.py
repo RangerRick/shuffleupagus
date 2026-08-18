@@ -1,12 +1,13 @@
 import datetime
 import random
 import string
+import time
 import unicodedata
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from .cache import CACHE_DEFAULT_CUTOFF, Cache
 from .config import Config
-from .util import logger, service_tag, spread_artist_playlists
+from .util import format_retry_message, logger, service_tag, spread_artist_playlists
 
 MAX_TOP_TRACKS = 5
 MAX_ARTIST_TRACKS = 10
@@ -165,6 +166,25 @@ class Service:
         """Evict expired cache entries, then release the cache connection."""
         self.cache.save()
         self.cache.close()
+
+    _RATE_LIMIT_CACHE_KEY = "rate_limit_until"
+
+    def _record_rate_limit(self, service_label: str, retry_after: int) -> str:
+        """Persist a rate-limit window so the next run fails fast. Returns the message."""
+        retry_epoch = time.time() + retry_after
+        self.cache.write(self._RATE_LIMIT_CACHE_KEY, retry_epoch, ttl=retry_after)
+        return format_retry_message(service_label, retry_epoch, retry_after)
+
+    def _check_rate_limit(self, service_label: str) -> None:
+        """Fail fast if an earlier run recorded a rate-limit window still in effect."""
+        retry_epoch = self.cache.read_stale(self._RATE_LIMIT_CACHE_KEY)
+        if not retry_epoch:
+            return
+        remaining = retry_epoch - time.time()
+        if remaining <= 0:
+            self.cache.delete(self._RATE_LIMIT_CACHE_KEY)
+            return
+        raise RuntimeError(format_retry_message(service_label, retry_epoch, remaining))
 
     def get_artist(self, artist: str | Artist) -> Artist | None:
         raise NotImplementedError

@@ -1,5 +1,6 @@
 """Tests for AppleMusicService with all network/applescript calls mocked."""
 
+import time
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -109,23 +110,32 @@ def test_get_artist_sanitizes_url_id(svc):
 # ---------------------------------------------------------------------------
 
 
-def _http_error(status_code):
+def _http_error(status_code, headers=None):
     """Build the HTTPError applemusicpy raises once its own retries are exhausted."""
     resp = MagicMock()
     resp.status_code = status_code
+    # A real dict, not a MagicMock: int(MagicMock()) is 1, which would silently
+    # fake a Retry-After of one second on every 429 test.
+    resp.headers = {} if headers is None else headers
     return requests.exceptions.HTTPError(f"HTTP {status_code}", response=resp)
 
 
-@pytest.mark.parametrize("status_code", [401, 403, 429])
-def test_get_artist_fatal_error_raises(svc, status_code):
+@pytest.mark.parametrize("status_code", [401, 403])
+def test_get_artist_auth_error_raises(svc, status_code):
     svc.client.artist.side_effect = _http_error(status_code)
     with pytest.raises(RuntimeError, match=str(status_code)):
         svc.get_artist("a1")
 
 
+def test_get_artist_rate_limit_raises(svc):
+    svc.client.artist.side_effect = _http_error(429)
+    with pytest.raises(RuntimeError, match="rate-limited"):
+        svc.get_artist("a1")
+
+
 def test_get_album_by_id_fatal_error_raises(svc):
     svc.client.album.side_effect = _http_error(429)
-    with pytest.raises(RuntimeError, match="429"):
+    with pytest.raises(RuntimeError, match="rate-limited"):
         svc.get_album_by_id("alb1")
 
 
@@ -133,7 +143,7 @@ def test_get_artist_albums_fatal_error_raises(svc):
     from shuffleupagus.core.model import Artist
 
     svc.client.artist_relationship.side_effect = _http_error(429)
-    with pytest.raises(RuntimeError, match="429"):
+    with pytest.raises(RuntimeError, match="rate-limited"):
         svc.get_artist_albums(Artist("a1", "A"))
 
 
@@ -141,7 +151,7 @@ def test_get_album_tracks_fatal_error_raises(svc):
     from shuffleupagus.core.model import Album
 
     svc.client.album_relationship.side_effect = _http_error(429)
-    with pytest.raises(RuntimeError, match="429"):
+    with pytest.raises(RuntimeError, match="rate-limited"):
         svc.get_album_tracks(Album("alb1", "A"))
 
 
@@ -149,8 +159,35 @@ def test_get_artist_top_tracks_fatal_error_raises(svc):
     from shuffleupagus.core.model import Artist
 
     svc.client.artist_relationship_view.side_effect = _http_error(429)
-    with pytest.raises(RuntimeError, match="429"):
+    with pytest.raises(RuntimeError, match="rate-limited"):
         svc.get_artist_top_tracks(Artist("a1", "A"))
+
+
+def test_rate_limit_honours_retry_after(svc):
+    """A Retry-After header is turned into a countdown and a cached window."""
+    from shuffleupagus.core.model import Service
+
+    svc.client.artist.side_effect = _http_error(429, {"Retry-After": "3661"})
+    with pytest.raises(RuntimeError, match="1h 1m from now"):
+        svc.get_artist("a1")
+    assert svc.cache.read_stale(Service._RATE_LIMIT_CACHE_KEY) > time.time()
+
+
+def test_rate_limit_without_retry_after_does_not_cache(svc):
+    """Without Retry-After there is no known window, so nothing is persisted."""
+    from shuffleupagus.core.model import Service
+
+    svc.client.artist.side_effect = _http_error(429)
+    with pytest.raises(RuntimeError, match="no Retry-After header"):
+        svc.get_artist("a1")
+    assert svc.cache.read_stale(Service._RATE_LIMIT_CACHE_KEY) is None
+
+
+def test_rate_limit_ignores_garbage_retry_after(svc):
+    """A non-numeric Retry-After is treated as absent, not crashed on."""
+    svc.client.artist.side_effect = _http_error(429, {"Retry-After": "soon"})
+    with pytest.raises(RuntimeError, match="no Retry-After header"):
+        svc.get_artist("a1")
 
 
 # ---------------------------------------------------------------------------
@@ -305,7 +342,7 @@ def test_get_track_by_id_error_returns_none(svc):
 
 def test_get_track_by_id_fatal_error_raises(svc):
     svc.client.song.side_effect = _http_error(429)
-    with pytest.raises(RuntimeError, match="429"):
+    with pytest.raises(RuntimeError, match="rate-limited"):
         svc._get_track_by_id("t1")
 
 

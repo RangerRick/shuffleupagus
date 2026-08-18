@@ -8,10 +8,10 @@ import pytest
 import spotipy
 
 from shuffleupagus.core.cache import Cache
-from shuffleupagus.core.model import Album, Artist
+from shuffleupagus.core.model import Album, Artist, Service
 from shuffleupagus.services.spotify.service import (
     SpotifyService,
-    _format_rate_limit,
+    _retry_after_seconds,
 )
 
 # ---------------------------------------------------------------------------
@@ -277,7 +277,7 @@ def test_sync_raises_when_tracks_never_verify(svc):
 
 
 # ---------------------------------------------------------------------------
-# _format_rate_limit
+# rate-limit detection
 # ---------------------------------------------------------------------------
 
 
@@ -286,23 +286,32 @@ def _rate_limit_exc(headers):
     return spotipy.SpotifyException(429, -1, "rate limited", headers=headers)
 
 
-def test_format_rate_limit_with_retry_after():
-    msg, epoch = _format_rate_limit(_rate_limit_exc({"Retry-After": "3661"}))
-    assert "1h 1m from now" in msg
-    assert epoch > 0
+def test_retry_after_seconds_reads_header():
+    assert _retry_after_seconds(_rate_limit_exc({"Retry-After": "3661"})) == 3661
 
 
-def test_format_rate_limit_without_retry_after():
-    msg, epoch = _format_rate_limit(_rate_limit_exc({}))
-    assert "no Retry-After header" in msg
-    assert epoch == 0
+def test_retry_after_seconds_missing_header():
+    assert _retry_after_seconds(_rate_limit_exc({})) == 0
 
 
-def test_format_rate_limit_no_headers_attr():
-    exc = Exception("rate limited")
-    msg, epoch = _format_rate_limit(exc)
-    assert "no Retry-After header" in msg
-    assert epoch == 0
+def test_retry_after_seconds_no_headers_attr():
+    assert _retry_after_seconds(Exception("rate limited")) == 0
+
+
+def test_call_429_with_retry_after_records_window(svc):
+    """A 429 carrying Retry-After is reported with a countdown and cached."""
+    svc.spotify.artist.side_effect = _rate_limit_exc({"Retry-After": "3661"})
+    with pytest.raises(RuntimeError, match="1h 1m from now"):
+        svc._call(svc.spotify.artist, "a1")
+    assert svc.cache.read_stale(Service._RATE_LIMIT_CACHE_KEY) > time.time()
+
+
+def test_call_429_without_retry_after_does_not_cache(svc):
+    """Without Retry-After there is no known window, so nothing is persisted."""
+    svc.spotify.artist.side_effect = _rate_limit_exc({})
+    with pytest.raises(RuntimeError, match="no Retry-After header"):
+        svc._call(svc.spotify.artist, "a1")
+    assert svc.cache.read_stale(Service._RATE_LIMIT_CACHE_KEY) is None
 
 
 # ---------------------------------------------------------------------------
@@ -360,13 +369,13 @@ def test_login_sets_up_session(svc, monkeypatch):
 
 def test_check_rate_limit_no_cached_epoch(svc):
     """No cached rate-limit entry means no error."""
-    svc._check_rate_limit()
+    svc._check_rate_limit("Spotify")
 
 
 def test_check_rate_limit_expired(svc):
     """Expired rate-limit entry is deleted and does not raise."""
     svc.cache.write("rate_limit_until", time.time() - 10, ttl=999999)
-    svc._check_rate_limit()
+    svc._check_rate_limit("Spotify")
     assert svc.cache.read_stale("rate_limit_until") is None
 
 
@@ -375,7 +384,7 @@ def test_check_rate_limit_active(svc):
     future = time.time() + 7200
     svc.cache.write("rate_limit_until", future, ttl=999999)
     with pytest.raises(RuntimeError, match="rate-limited"):
-        svc._check_rate_limit()
+        svc._check_rate_limit("Spotify")
 
 
 # ---------------------------------------------------------------------------

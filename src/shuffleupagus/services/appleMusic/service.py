@@ -9,6 +9,13 @@ from ...core.model import Album, Artist, Service, Track
 from ...core.util import logger
 from .model import AppleMusicAlbum, AppleMusicArtist, AppleMusicTrack, sanitize_id
 
+_REQUEST_TIMEOUT = 30
+
+# applemusicpy defaults to 10 retries with an escalating sleep (~65s per call) and
+# ignores Retry-After entirely. Keep enough retries for a transient 5xx, few enough
+# that a rate-limited run surfaces the 429 instead of stalling on every call.
+_MAX_CLIENT_RETRIES = 2
+
 
 class AppleMusicService(Service):
     name = "appleMusic"
@@ -30,7 +37,10 @@ class AppleMusicService(Service):
             secret_key=key,
             key_id=self._require_config("key-id"),
             team_id=self._require_config("team-id"),
+            requests_timeout=_REQUEST_TIMEOUT,
+            max_retries=_MAX_CLIENT_RETRIES,
         )
+        self._check_rate_limit("Apple Music")
 
     def sanitize_id(self, id: str) -> str:
         return sanitize_id(id)
@@ -44,9 +54,23 @@ class AppleMusicService(Service):
         subsequent call will fail the same way, so continuing would just log the
         same error hundreds of times instead of stopping the run.
         """
-        status = getattr(getattr(e, "response", None), "status_code", None)
-        if status in (401, 403, 429):
-            raise RuntimeError(f"Apple Music API error ({status}) fetching {what}: {e}") from e
+        response = getattr(e, "response", None)
+        status = getattr(response, "status_code", None)
+        if status not in (401, 403, 429):
+            return
+        if status == 429:
+            # Honour Retry-After, which applemusicpy's own retry loop ignores, and
+            # persist the window so the next run fails fast instead of hammering.
+            retry_after = 0
+            headers = getattr(response, "headers", None) or {}
+            try:
+                retry_after = int(headers.get("Retry-After", 0))
+            except TypeError, ValueError:
+                retry_after = 0
+            if retry_after > 0:
+                raise RuntimeError(self._record_rate_limit("Apple Music", retry_after)) from e
+            raise RuntimeError("Apple Music rate-limited (no Retry-After header). Try again later.") from e
+        raise RuntimeError(f"Apple Music API error ({status}) fetching {what}: {e}") from e
 
     # model: https://developer.apple.com/documentation/applemusicapi/artists
     def get_artist(self, artist) -> AppleMusicArtist | None:

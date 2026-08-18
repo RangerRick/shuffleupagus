@@ -1,8 +1,6 @@
 import copy
-import datetime
 import sys
 import threading
-import time
 from concurrent.futures import as_completed
 
 import requests.adapters
@@ -21,28 +19,13 @@ _FINGERPRINT_TTL = 60 * 60 * 24  # 24 hours
 _REQUEST_TIMEOUT = 30
 
 
-_RATE_LIMIT_CACHE_KEY = "rate_limit_until"
+_NO_RETRY_AFTER_MESSAGE = "Spotify rate-limited (no Retry-After header). Try again later."
 
 
-def _format_rate_limit(exc: Exception) -> tuple[str, float]:
-    """Build a human-readable rate-limit message and return the retry epoch.
-
-    Returns (message, retry_epoch) where retry_epoch is 0 if unknown.
-    """
+def _retry_after_seconds(exc: Exception) -> int:
+    """Read the Retry-After header off a rate-limit exception, 0 when absent."""
     headers = getattr(exc, "headers", None) or {}
-    retry_after = int(headers.get("Retry-After", 0))
-    if retry_after > 0:
-        now = datetime.datetime.now(tz=datetime.UTC).astimezone()
-        retry_time = now + datetime.timedelta(seconds=retry_after)
-        hours = retry_after // 3600
-        minutes = (retry_after % 3600) // 60
-        msg = (
-            f"Spotify rate-limited. Try again after "
-            f"{retry_time.strftime('%Y-%m-%d %H:%M')} "
-            f"({hours}h {minutes}m from now)"
-        )
-        return msg, retry_time.timestamp()
-    return "Spotify rate-limited (no Retry-After header). Try again later.", 0
+    return int(headers.get("Retry-After", 0))
 
 
 class SpotifyService(Service):
@@ -84,25 +67,7 @@ class SpotifyService(Service):
         session.mount("https://", adapter)
         session.mount("http://", adapter)
         self._acquire_token(creds)
-        self._check_rate_limit()
-
-    def _check_rate_limit(self):
-        """Fail fast if a previous run recorded a rate-limit window."""
-        retry_epoch = self.cache.read_stale(_RATE_LIMIT_CACHE_KEY)
-        if retry_epoch is None or retry_epoch == 0:
-            return
-        remaining = retry_epoch - time.time()
-        if remaining <= 0:
-            self.cache.delete(_RATE_LIMIT_CACHE_KEY)
-            return
-        retry_time = datetime.datetime.fromtimestamp(retry_epoch, tz=datetime.UTC).astimezone()
-        hours = int(remaining) // 3600
-        minutes = (int(remaining) % 3600) // 60
-        raise RuntimeError(
-            f"Spotify rate-limited. Try again after "
-            f"{retry_time.strftime('%Y-%m-%d %H:%M')} "
-            f"({hours}h {minutes}m from now)"
-        )
+        self._check_rate_limit("Spotify")
 
     def _acquire_token(self, creds: SpotifyOAuth):
         """Force token acquisition on the main thread.
@@ -146,13 +111,11 @@ class SpotifyService(Service):
                 status = getattr(e, "http_status", None)
                 msg = str(e)
                 if status == 429 or "429" in msg:
-                    rate_msg, retry_epoch = _format_rate_limit(e)
-                    if retry_epoch > 0:
-                        self.cache.write(
-                            _RATE_LIMIT_CACHE_KEY,
-                            retry_epoch,
-                            ttl=retry_epoch - time.time(),
-                        )
+                    retry_after = _retry_after_seconds(e)
+                    if retry_after > 0:
+                        rate_msg = self._record_rate_limit("Spotify", retry_after)
+                    else:
+                        rate_msg = _NO_RETRY_AFTER_MESSAGE
                     self._rate_limited = rate_msg
                     raise RuntimeError(rate_msg) from e
                 raise

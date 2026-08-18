@@ -1,3 +1,4 @@
+import datetime
 import importlib
 import logging
 import os
@@ -35,6 +36,18 @@ def service_tag(name: str) -> str:
     """Return a short prefix tag for the given service name."""
     tags = _NERD_FONT_TAGS if _use_nerd_fonts() else _PLAIN_TAGS
     return tags.get(name, f"[{name}] ")
+
+
+def format_retry_message(service_label: str, retry_epoch: float, remaining: float) -> str:
+    """Say when a rate-limit window expires, as both a clock time and a countdown."""
+    retry_time = datetime.datetime.fromtimestamp(retry_epoch, tz=datetime.UTC).astimezone()
+    hours = int(remaining) // 3600
+    minutes = (int(remaining) % 3600) // 60
+    return (
+        f"{service_label} rate-limited. Try again after "
+        f"{retry_time.strftime('%Y-%m-%d %H:%M')} "
+        f"({hours}h {minutes}m from now)"
+    )
 
 
 def init_logging(level: str):
