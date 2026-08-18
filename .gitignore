@@ -4,6 +4,8 @@
 # python stuff
 .coverage
 coverage.xml
+coverage.json
+/dist/
 .hypothesis/
 /build/
 /\.?venv/

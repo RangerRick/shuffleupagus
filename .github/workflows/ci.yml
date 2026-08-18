@@ -1,0 +1,112 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+# Least privilege by default. No job here needs more; add per-job overrides
+# rather than widening this.
+permissions:
+  contents: read
+
+# A new push to the same PR supersedes the run in flight.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+# macOS runners, not Linux. This project drives Music.app through AppleScript,
+# so it depends on py-applescript -> pyobjc-core, which refuses to build
+# anywhere else ("PyObjC requires macOS to build"). Installing the project at
+# all is impossible on ubuntu today. Making Linux CI possible needs environment
+# markers on those dependencies and lazy imports in the appleMusic plugin — see
+# the follow-up issue.
+
+jobs:
+  validate:
+    name: lint and types
+    runs-on: macos-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+        with:
+          enable-cache: true
+      - run: uv sync --all-groups
+      - run: uv run ruff check src/ tests/ scripts/
+      - run: uv run ruff format --check src/ tests/ scripts/
+      - run: uv run ty check src/ tests/ scripts/
+
+  test:
+    name: tests and coverage
+    runs-on: macos-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+        with:
+          enable-cache: true
+      - run: uv sync --all-groups
+      # The aggregate fail_under gate lives in pyproject and fails this step.
+      - name: pytest
+        run: uv run pytest --cov-report=json:coverage.json
+      # Per-module floors, which the aggregate number can hide.
+      - name: per-module coverage floors
+        run: uv run python3 scripts/check_per_module_coverage.py coverage.json
+
+  smoke:
+    name: smoke test
+    runs-on: macos-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+        with:
+          enable-cache: true
+      # Builds the wheel, installs it into a clean prefix, and runs the real
+      # console script. Deliberately does not depend on `test`: a packaging
+      # break is worth hearing about even while a unit test is red.
+      - run: bash scripts/smoke_test.sh
+
+  workflows:
+    name: workflow audit
+    runs-on: macos-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+        with:
+          enable-cache: true
+      # Runs online, using the job's own read-only token, so the audits that
+      # resolve action repos still work — known-vulnerable-actions and
+      # stale-action-refs are the point of auditing a file full of SHA pins.
+      # Version-pinned so the ruleset changes in a commit, not on its own.
+      - name: zizmor
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: uvx zizmor@1.29.0 --format plain .github/workflows/
+
+  shell:
+    name: shell scripts
+    runs-on: macos-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # Neither is guaranteed on the macOS image, so install both rather than
+      # letting a missing tool read as a passing job.
+      - name: install shellcheck and shfmt
+        env:
+          HOMEBREW_NO_AUTO_UPDATE: "1"
+        run: brew install --quiet shellcheck shfmt
+      - run: shellcheck scripts/*.sh
+      - run: shfmt -d scripts/*.sh
