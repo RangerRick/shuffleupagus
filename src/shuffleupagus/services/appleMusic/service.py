@@ -32,9 +32,6 @@ class AppleMusicService(Service):
             team_id=self._require_config("team-id"),
         )
 
-    def close(self):
-        self.cache.save()
-
     def sanitize_id(self, id: str) -> str:
         return sanitize_id(id)
 

@@ -162,7 +162,9 @@ class Service:
         raise NotImplementedError
 
     def close(self) -> None:
-        raise NotImplementedError
+        """Evict expired cache entries, then release the cache connection."""
+        self.cache.save()
+        self.cache.close()
 
     def get_artist(self, artist: str | Artist) -> Artist | None:
         raise NotImplementedError

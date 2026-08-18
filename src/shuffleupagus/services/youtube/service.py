@@ -250,9 +250,6 @@ class YoutubeService(Service):
         resp = requests.delete(url, headers={"Authorization": f"Bearer {access_token}"}, params=params, timeout=30)
         self._check_api_response(resp)
 
-    def close(self):
-        self.cache.save()
-
     def sanitize_id(self, id: str) -> str:
         if id.startswith(("http://", "https://", "youtube.com", "www.youtube.com")):
             url = id.removeprefix("https://").removeprefix("http://").removeprefix("www.")

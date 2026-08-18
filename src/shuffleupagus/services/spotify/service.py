@@ -157,9 +157,6 @@ class SpotifyService(Service):
                     raise RuntimeError(rate_msg) from e
                 raise
 
-    def close(self):
-        self.cache.save()
-
     def sanitize_id(self, id: str) -> str:
         return sanitize_id(id)
 

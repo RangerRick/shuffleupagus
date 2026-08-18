@@ -71,10 +71,21 @@ def _load_services(
         except RuntimeError as exc:
             logger.warning(f"{service.tag}! {exc}")
             errors.append((service.name, exc))
+            # This service never reaches the shutdown loop in main(), so release
+            # its cache connection here instead of leaking it for the whole run.
+            _close_service(service)
         else:
             services.append(service)
 
     return services, errors
+
+
+def _close_service(service: Service) -> None:
+    """Close one service, logging rather than raising so other services still close."""
+    try:
+        service.close()
+    except Exception:
+        logger.exception(f"{service.tag}! error closing service")
 
 
 def main():
@@ -156,7 +167,7 @@ def main():
                 errors.append((service.name, exc))
     finally:
         for service in services:
-            service.close()
+            _close_service(service)
 
     if errors:
         failed = ", ".join(name for name, _ in errors)

@@ -1,3 +1,4 @@
+import sqlite3
 import threading
 import time
 
@@ -181,3 +182,11 @@ def test_concurrent_write_and_save(tmp_path, monkeypatch):
     alive = [t for t in threads if t.is_alive()]
     assert not alive, "Deadlock detected: threads still alive after timeout"
     assert not errors, f"Concurrent write+save raised: {errors}"
+
+
+def test_close_releases_connection(cache):
+    """close() closes the sqlite connection, so later use raises."""
+    cache.write("k", "v")
+    cache.close()
+    with pytest.raises(sqlite3.ProgrammingError):
+        cache.read("k")
