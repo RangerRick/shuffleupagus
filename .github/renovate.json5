@@ -8,36 +8,70 @@
   ],
 
   // General settings
-  "assigneesFromCodeOwners": true,
   "baseBranchPatterns": ["main"],
   "branchConcurrentLimit": 5,
   "internalChecksFilter": "strict",
   "labels": ["dependencies"],
   "minimumReleaseAge": "7 days",
-  "prCreation": "not-pending",
+  // "not-pending" waits for branch checks to finish before opening the PR.
+  // There is no CI here yet (#15), so nothing ever reports and every PR would
+  // sit out the ~25h prNotPendingHours fallback. internalChecksFilter already
+  // enforces minimumReleaseAge before the branch is pushed, so the cooldown
+  // does not depend on this.
+  "prCreation": "immediate",
   "prHourlyLimit": 0,
   "rangeStrategy": "bump",
+
+  // Refresh uv.lock so transitive pins move too. The default schedule is
+  // "before 4am on monday", which leaves transitive security fixes up to a
+  // week behind every other update.
+  "lockFileMaintenance": { "enabled": true, "schedule": [] },
+
+  // Pin Actions by digest and rewrite the trailing version comment on every
+  // bump, so the pinned ratio starts at 100% once workflows exist (#15).
+  "github-actions": { "pinDigests": true },
+
+  "vulnerabilityAlerts": { "labels": ["dependencies", "security"] },
 
   // Package- or manager-specific rules
   "packageRules": [
     {
+      // Enumerated, not "!major". A negation-only matchUpdateTypes list also
+      // matches majors: the matcher tests ["major", "bump"] with .some(), and
+      // "bump" is not excluded by "!major", so the rule returns true. rangeStrategy
+      // "bump" plus the open-ended ">=" constraints in [project.dependencies] make
+      // isBump true for majors, so every runtime major would have automerged here.
+      // Do not add "bump" to this list either — that reopens the same hole.
       "groupName": "auto-merge non-major dependencies",
       "groupSlug": "all-non-major",
-      "matchUpdateTypes": ["!major"],
+      "matchUpdateTypes": ["minor", "patch", "pin", "digest"],
       "automerge": true,
     },
     {
+      // pep621 names depTypes after the pyproject table they came from, so the
+      // dev group is "dependency-groups" (PEP 735). npm's "devDependencies"
+      // matches nothing in a Python repo and fails silently.
       "groupName": "auto-merge developer dependencies",
       "groupSlug": "dev-dependencies",
-      "matchDepTypes": ["devDependencies"],
+      "matchDepTypes": ["dependency-groups"],
       "automerge": true,
     },
 
     {
+      // uv reads pyproject.toml via the pep621 manager. There is no
+      // requirements.txt here, so pip_requirements matched nothing.
       "groupName": "group PyTest package updates together",
       "groupSlug": "pytest",
-      "matchManagers": ["pip_requirements"],
+      "matchManagers": ["pep621"],
       "matchPackageNames": ["/^pytest/"],
+    },
+
+    // Last, so it overrides the groupName and automerge set by any rule above.
+    // Majors get their own PR and a human read.
+    {
+      "matchUpdateTypes": ["major"],
+      "groupName": null,
+      "automerge": false,
     },
   ],
 
