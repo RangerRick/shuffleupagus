@@ -212,6 +212,11 @@ class SpotifyService(Service):
                             self.cache.touch(cache_key)
                             self.cache.write(fp_key, latest_id, ttl=_FINGERPRINT_TTL)
                             ret = stale
+                except RuntimeError:
+                    # _call() raises RuntimeError for rate limiting. Let it
+                    # propagate so collect_tracks() aborts the run, instead of
+                    # burying a 429 in a debug-level "fingerprint check failed".
+                    raise
                 except Exception as e:
                     logger.debug(f"{self.tag}* fingerprint check failed for {artist.id}: {e}")
 

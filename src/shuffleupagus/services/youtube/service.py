@@ -438,10 +438,17 @@ class YoutubeService(Service):
         if not ret:
             try:
                 ret = self.client.get_album(album.id)
-            except KeyError, YTMusicServerError:
-                logger.warning(
-                    f"{self.tag}* HTTP 400 fetching album '{album.name}' ({album.id}), skipping",
-                )
+            except (KeyError, YTMusicServerError) as e:
+                # Report what actually failed. A blanket "HTTP 400" here hid
+                # quota and auth errors behind a routine "album not found".
+                if "400" in str(e):
+                    logger.warning(
+                        f"{self.tag}* album '{album.name}' ({album.id}) is not on YouTube Music, skipping",
+                    )
+                else:
+                    logger.warning(
+                        f"{self.tag}* error fetching album '{album.name}' ({album.id}): {e}, skipping",
+                    )
                 return []
             self.cache.write(cache_key, ret)
 

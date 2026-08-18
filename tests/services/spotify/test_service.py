@@ -637,6 +637,24 @@ def test_get_artist_albums_fingerprint_check_exception(svc):
     assert svc.spotify.artist_albums.call_count == 2
 
 
+def test_get_artist_albums_fingerprint_rate_limit_propagates(svc):
+    """A 429 during the fingerprint check aborts instead of falling back."""
+    stale_albums = [_album_payload("alb1", "Old")]
+    svc.cache.write("artist:a1:albums", stale_albums, ttl=60.0)
+    svc.cache._conn.execute(
+        "UPDATE cache SET stored_at = ? WHERE key = ?",
+        (time.time() - 3600, "artist:a1:albums"),
+    )
+    svc.cache._conn.commit()
+
+    svc.spotify.artist_albums.side_effect = _rate_limit_exc({"Retry-After": "60"})
+
+    with pytest.raises(RuntimeError, match="rate-limited"):
+        svc.get_artist_albums(Artist("a1", "A"))
+    # No second (full refetch) call — the run stopped at the rate limit.
+    assert svc.spotify.artist_albums.call_count == 1
+
+
 def test_get_artist_albums_none_response(svc):
     """artist_albums returning None yields empty list."""
     svc.spotify.artist_albums.return_value = None

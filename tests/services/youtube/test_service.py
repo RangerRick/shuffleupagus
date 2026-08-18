@@ -1,5 +1,6 @@
 """Tests for YoutubeService with all network/ytmusicapi calls mocked."""
 
+import logging
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -1083,6 +1084,25 @@ def test_get_album_tracks_error_returns_empty(svc):
     svc.client.get_album.side_effect = KeyError("bad")
     tracks = svc.get_album_tracks(album)
     assert tracks == []
+
+
+def test_get_album_tracks_400_logs_not_on_youtube(svc, caplog):
+    """An HTTP 400 is reported as a missing album, not as a generic error."""
+    album = Album("MPL1", "Album")
+    svc.client.get_album.side_effect = YTMusicServerError("HTTP 400: Bad Request")
+    with caplog.at_level(logging.WARNING):
+        assert svc.get_album_tracks(album) == []
+    assert "is not on YouTube Music" in caplog.text
+
+
+def test_get_album_tracks_non_400_reports_real_error(svc, caplog):
+    """A non-400 failure reports the underlying error instead of claiming HTTP 400."""
+    album = Album("MPL1", "Album")
+    svc.client.get_album.side_effect = YTMusicServerError("quotaExceeded")
+    with caplog.at_level(logging.WARNING):
+        assert svc.get_album_tracks(album) == []
+    assert "quotaExceeded" in caplog.text
+    assert "400" not in caplog.text
 
 
 def test_get_album_tracks_resolves_artists(svc):
