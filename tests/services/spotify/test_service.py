@@ -227,9 +227,20 @@ def test_get_playlist_id_for_name_not_found(svc):
         svc.get_playlist_id_for_name("Missing")
 
 
+def _mock_playlist_items(svc, track_ids):
+    """Make playlist_items read back exactly track_ids, one page at a time."""
+
+    def _items(_playlist_id, fields=None, limit=100, offset=0):
+        page = track_ids[offset : offset + limit]
+        return {"items": [{"track": {"id": tid}} for tid in page]}
+
+    svc.spotify.playlist_items.side_effect = _items
+
+
 def test_sync_replaces_and_adds(svc):
     svc.spotify.current_user_playlists.return_value = {"items": [{"id": "pl1", "name": "Playlist"}]}
     tracks = [f"t{i}" for i in range(100)]
+    _mock_playlist_items(svc, tracks)
     svc.sync("Playlist", tracks)
     svc.spotify.playlist_replace_items.assert_called_once_with("pl1", tracks[:80])
     svc.spotify.playlist_add_items.assert_called_once_with("pl1", tracks[80:])
@@ -237,9 +248,32 @@ def test_sync_replaces_and_adds(svc):
 
 def test_sync_single_batch(svc):
     svc.spotify.current_user_playlists.return_value = {"items": [{"id": "pl1", "name": "P"}]}
+    _mock_playlist_items(svc, ["t1", "t2"])
     svc.sync("P", ["t1", "t2"])
     svc.spotify.playlist_replace_items.assert_called_once()
     svc.spotify.playlist_add_items.assert_not_called()
+
+
+def test_sync_readds_missing_tracks(svc):
+    """A track absent from the read-back is re-added, then verification passes."""
+    svc.spotify.current_user_playlists.return_value = {"items": [{"id": "pl1", "name": "P"}]}
+    reads = [["t1"], ["t1", "t2"]]
+
+    def _items(_playlist_id, fields=None, limit=100, offset=0):
+        page = reads[0] if len(reads) == 1 else reads.pop(0)
+        return {"items": [{"track": {"id": tid}} for tid in page[offset : offset + limit]]}
+
+    svc.spotify.playlist_items.side_effect = _items
+    svc.sync("P", ["t1", "t2"])
+    svc.spotify.playlist_add_items.assert_called_once_with("pl1", ["t2"])
+
+
+def test_sync_raises_when_tracks_never_verify(svc):
+    """A track the API never persists raises instead of retrying forever."""
+    svc.spotify.current_user_playlists.return_value = {"items": [{"id": "pl1", "name": "P"}]}
+    _mock_playlist_items(svc, ["t1"])
+    with pytest.raises(RuntimeError, match="could not be verified"):
+        svc.sync("P", ["t1", "t2"])
 
 
 # ---------------------------------------------------------------------------

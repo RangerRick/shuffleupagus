@@ -51,6 +51,8 @@ class SpotifyService(Service):
     spotify: spotipy.Spotify
     _api_lock: threading.Lock
 
+    _MAX_VERIFY_ROUNDS = 3
+
     def _require_config(self, key: str) -> str:
         val = self.config.get(key)
         if val is None:
@@ -328,12 +330,64 @@ class SpotifyService(Service):
             offset += 50
         raise ValueError(f"Playlist not found: {playlist_name}")
 
+    def __get_playlist_track_ids(self, playlist_id: str) -> list[str]:
+        """Read every track ID currently in the playlist."""
+        ids: list[str] = []
+        offset = 0
+        while True:
+            results = self._call(
+                self.spotify.playlist_items,
+                playlist_id,
+                fields="items(track(id))",
+                limit=100,
+                offset=offset,
+            )
+            items = results.get("items", []) if results else []
+            for item in items:
+                track = item.get("track") or {}
+                if track.get("id"):
+                    ids.append(track["id"])
+            if len(items) < 100:
+                break
+            offset += 100
+        return ids
+
+    def __verify_playlist(self, playlist_id: str, expected_ids: list[str]) -> None:
+        """Confirm every track reached the playlist, re-adding any that did not.
+
+        Spotify's API is read-after-write consistent, so no settle delay is
+        needed here — a track absent from the read-back was genuinely dropped.
+        """
+        expected = set(expected_ids)
+        for round_num in range(self._MAX_VERIFY_ROUNDS + 1):
+            missing = expected - set(self.__get_playlist_track_ids(playlist_id))
+            if not missing:
+                logger.info(f"{self.tag}  * verified {len(expected)} tracks in playlist")
+                return
+            if round_num == self._MAX_VERIFY_ROUNDS:
+                raise RuntimeError(
+                    f"{len(missing)} tracks could not be verified in the Spotify playlist "
+                    f"after {self._MAX_VERIFY_ROUNDS} re-add rounds: {sorted(missing)}"
+                )
+            logger.warning(
+                f"{self.tag}  ! {len(missing)} tracks missing after sync, "
+                f"re-adding (round {round_num + 1}/{self._MAX_VERIFY_ROUNDS})"
+            )
+            retry = list(missing)
+            while retry:
+                self._call(self.spotify.playlist_add_items, playlist_id, retry[0:80])
+                del retry[0:80]
+
     def sync(self, playlist_name: str, tracks: list[str] | None = None):
         playlist_id = self.get_playlist_id_for_name(playlist_name)
 
-        playlist_tracks = copy.deepcopy(tracks or [])
+        expected_ids = list(tracks or [])
+        playlist_tracks = copy.deepcopy(expected_ids)
         self._call(self.spotify.playlist_replace_items, playlist_id, playlist_tracks[0:80])
         del playlist_tracks[0:80]
         while len(playlist_tracks) > 0:
             self._call(self.spotify.playlist_add_items, playlist_id, playlist_tracks[0:80])
             del playlist_tracks[0:80]
+
+        if expected_ids:
+            self.__verify_playlist(playlist_id, expected_ids)
