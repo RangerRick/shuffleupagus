@@ -38,10 +38,23 @@ class AppleMusicService(Service):
     def sanitize_id(self, id: str) -> str:
         return sanitize_id(id)
 
+    def _reraise_if_fatal(self, e: Exception, what: str) -> None:
+        """Abort the run on auth/rate-limit failures instead of masking them per-item.
+
+        applemusicpy exhausts its own internal retries on 429/5xx before raising, so
+        a requests.exceptions.HTTPError reaching here with status 401/403/429 means
+        the credentials are bad or the API is actively rate-limiting us — every
+        subsequent call will fail the same way, so continuing would just log the
+        same error hundreds of times instead of stopping the run.
+        """
+        status = getattr(getattr(e, "response", None), "status_code", None)
+        if status in (401, 403, 429):
+            raise RuntimeError(f"Apple Music API error ({status}) fetching {what}: {e}") from e
+
     # model: https://developer.apple.com/documentation/applemusicapi/artists
     def get_artist(self, artist) -> AppleMusicArtist | None:
         if isinstance(artist, str):
-            artist_id = artist
+            artist_id = self.sanitize_id(artist)
             artist_obj = None
         else:
             artist_id = artist.id
@@ -57,6 +70,7 @@ class AppleMusicService(Service):
                     ret = artist_obj
                     self.cache.write(cache_key, ret)
             except Exception as e:
+                self._reraise_if_fatal(e, "artist")
                 logger.error(f"{self.tag}  ! error fetching artist: {e}")
 
         if ret is not None and ret["data"] and len(ret["data"]) > 0:
@@ -77,6 +91,7 @@ class AppleMusicService(Service):
                     ret = album_obj
                     self.cache.write(cache_key, ret)
             except Exception as e:
+                self._reraise_if_fatal(e, "album")
                 logger.error(f"{self.tag}  ! error fetching album: {e}")
 
         if ret is not None and ret["data"] and len(ret["data"]) > 0:
@@ -96,6 +111,7 @@ class AppleMusicService(Service):
                     ret = albums
                     self.cache.write(cache_key, ret)
             except Exception as e:
+                self._reraise_if_fatal(e, "artist albums")
                 logger.warning(f"{self.tag}  ! error fetching albums for {artist.name} ({artist.id}): {e}")
 
         if ret is None or "data" not in ret or len(ret["data"]) == 0:
@@ -118,6 +134,7 @@ class AppleMusicService(Service):
                     ret = track_obj
                     self.cache.write(cache_key, ret)
             except Exception as e:
+                self._reraise_if_fatal(e, "track")
                 logger.error(f"{self.tag}  ! error fetching track: {e}")
 
         if ret is not None and ret["data"] and len(ret["data"]) > 0:
@@ -150,6 +167,7 @@ class AppleMusicService(Service):
                     ret = album_tracks
                     self.cache.write(cache_key, ret)
             except Exception as e:
+                self._reraise_if_fatal(e, "album tracks")
                 logger.error(f"{self.tag}  ! error fetching album tracks: {e}")
 
         if ret is None or "data" not in ret or len(ret["data"]) == 0:
@@ -195,6 +213,7 @@ class AppleMusicService(Service):
                     ret = top_tracks
                 self.cache.write(cache_key, ret)
             except Exception as e:
+                self._reraise_if_fatal(e, "top tracks")
                 logger.error(f"{self.tag}  ! error fetching top tracks: {e}")
 
         if ret is None or "data" not in ret or len(ret["data"]) == 0:
@@ -344,16 +363,20 @@ class AppleMusicService(Service):
             if retries == 0:
                 raise RuntimeError(f"Failed to add tracks after 3 retries ({r.status_code} {r.reason})")
 
+    _MAX_REQUEUE_ROUNDS = 5
+
     def __add_tracks(self, playlist_id: str, track_ids: list[str]) -> None:
         """Add tracks in batches of 80, verifying after each batch.
 
         Uses the cloud API count as a fast check after each batch. When
         the count is short, reads the full track list to identify which
-        tracks are missing and re-queues them.
+        tracks are missing and re-queues them, up to _MAX_REQUEUE_ROUNDS
+        times before giving up on the still-missing tracks.
         """
         remaining = list(track_ids)
         expected_count = 0
         batch_num = 0
+        requeue_rounds = 0
 
         while remaining:
             batch = remaining[:80]
@@ -388,8 +411,16 @@ class AppleMusicService(Service):
                 actual = set(self.__get_playlist_tracks(playlist_id))
                 still_missing = expected_so_far - actual
                 if still_missing:
+                    requeue_rounds += 1
+                    if requeue_rounds > self._MAX_REQUEUE_ROUNDS:
+                        raise RuntimeError(
+                            f"{len(still_missing)} tracks could not be verified in the cloud "
+                            f"playlist after {self._MAX_REQUEUE_ROUNDS} re-queue rounds: "
+                            f"{sorted(still_missing)}"
+                        )
                     logger.warning(
-                        f"{self.tag}  ! batch {batch_num}: {len(still_missing)} tracks still missing, re-queuing"
+                        f"{self.tag}  ! batch {batch_num}: {len(still_missing)} tracks still missing, "
+                        f"re-queuing (round {requeue_rounds}/{self._MAX_REQUEUE_ROUNDS})"
                     )
                     remaining = list(still_missing) + remaining
                     expected_count -= len(still_missing)

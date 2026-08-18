@@ -95,6 +95,64 @@ def test_get_artist_empty_data_returns_none(svc):
     assert artist is None
 
 
+def test_get_artist_sanitizes_url_id(svc):
+    """A raw music.apple.com URL is sanitized before reaching the API client."""
+    svc.client.artist.return_value = _artist_response("123456", "My Artist")
+    artist = svc.get_artist("https://music.apple.com/us/artist/my-artist/123456")
+    assert artist.id == "123456"
+    svc.client.artist.assert_called_once_with("123456")
+
+
+# ---------------------------------------------------------------------------
+# fatal (auth/rate-limit) errors abort the run instead of being swallowed
+# ---------------------------------------------------------------------------
+
+
+def _http_error(status_code):
+    resp = MagicMock()
+    resp.status_code = status_code
+    exc = Exception(f"HTTP {status_code}")
+    exc.response = resp
+    return exc
+
+
+@pytest.mark.parametrize("status_code", [401, 403, 429])
+def test_get_artist_fatal_error_raises(svc, status_code):
+    svc.client.artist.side_effect = _http_error(status_code)
+    with pytest.raises(RuntimeError, match=str(status_code)):
+        svc.get_artist("a1")
+
+
+def test_get_album_by_id_fatal_error_raises(svc):
+    svc.client.album.side_effect = _http_error(429)
+    with pytest.raises(RuntimeError, match="429"):
+        svc.get_album_by_id("alb1")
+
+
+def test_get_artist_albums_fatal_error_raises(svc):
+    from shuffleupagus.core.model import Artist
+
+    svc.client.artist_relationship.side_effect = _http_error(429)
+    with pytest.raises(RuntimeError, match="429"):
+        svc.get_artist_albums(Artist("a1", "A"))
+
+
+def test_get_album_tracks_fatal_error_raises(svc):
+    from shuffleupagus.core.model import Album
+
+    svc.client.album_relationship.side_effect = _http_error(429)
+    with pytest.raises(RuntimeError, match="429"):
+        svc.get_album_tracks(Album("alb1", "A"))
+
+
+def test_get_artist_top_tracks_fatal_error_raises(svc):
+    from shuffleupagus.core.model import Artist
+
+    svc.client.artist_relationship_view.side_effect = _http_error(429)
+    with pytest.raises(RuntimeError, match="429"):
+        svc.get_artist_top_tracks(Artist("a1", "A"))
+
+
 # ---------------------------------------------------------------------------
 # get_album_by_id
 # ---------------------------------------------------------------------------
@@ -219,6 +277,42 @@ def test_get_album_tracks_with_artist(svc):
     artist = Artist("a1", "Artist")
     tracks = svc.get_album_tracks(album, artist)
     assert tracks[0].artists[0].id == "a1"
+
+
+# ---------------------------------------------------------------------------
+# _get_track_by_id
+# ---------------------------------------------------------------------------
+
+
+def test_get_track_by_id_cache_miss(svc):
+    svc.client.song.return_value = _track_response("t1", "My Track")
+    track = svc._get_track_by_id("t1")
+    assert track.id == "t1"
+    assert track.name == "My Track"
+
+
+def test_get_track_by_id_sanitizes_id(svc):
+    svc.client.song.return_value = _track_response("t1", "My Track")
+    svc._get_track_by_id("https://music.apple.com/us/song/my-track/t1")
+    svc.client.song.assert_called_once_with("t1")
+
+
+def test_get_track_by_id_error_returns_none(svc):
+    svc.client.song.side_effect = Exception("network error")
+    track = svc._get_track_by_id("t1")
+    assert track is None
+
+
+def test_get_track_by_id_fatal_error_raises(svc):
+    svc.client.song.side_effect = _http_error(429)
+    with pytest.raises(RuntimeError, match="429"):
+        svc._get_track_by_id("t1")
+
+
+def test_get_track_by_id_empty_data_returns_none(svc):
+    svc.client.song.return_value = {"data": []}
+    track = svc._get_track_by_id("t1")
+    assert track is None
 
 
 # ---------------------------------------------------------------------------
@@ -608,6 +702,25 @@ def test_add_tracks_requeues_missing_after_all_retries(svc):
 
     # 1 initial batch + 3 retries of t3 + 1 final fallback retry + 1 re-queued batch
     assert svc.client._session.post.call_count >= 5
+
+
+def test_add_tracks_raises_when_requeue_rounds_exhausted(svc):
+    """A track that never verifies raises instead of re-queuing forever."""
+    svc.client._auth_headers.return_value = {}
+
+    post_resp = MagicMock()
+    post_resp.status_code = 204
+    svc.client._session.post.return_value = post_resp
+
+    # Cloud never reflects t2: count is always 1, list is always [t1].
+    svc._AppleMusicService__get_playlist_length = MagicMock(return_value=1)
+    svc._AppleMusicService__get_playlist_tracks = MagicMock(return_value=["t1"])
+
+    with (
+        patch("shuffleupagus.services.appleMusic.service.time.sleep"),
+        pytest.raises(RuntimeError, match="could not be verified"),
+    ):
+        svc._AppleMusicService__add_tracks("pl1", ["t1", "t2"])
 
 
 def test_sync_empty_tracks_skips(svc):
