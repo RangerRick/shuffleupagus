@@ -117,8 +117,5 @@ testpaths = ["tests"]
 pythonpath = ["src"]
 filterwarnings = ["error"]
 
-[tool.coverage.run]
-omit = ["src/shuffleupagus/shuffleupagus.py"]
-
 [tool.coverage.report]
 fail_under = 80
