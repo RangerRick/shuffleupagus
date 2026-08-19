@@ -109,7 +109,11 @@ class SpotifyService(Service):
                 raise RuntimeError(self._rate_limited)
             try:
                 return method(*args, **kwargs)
-            except (spotipy.SpotifyException, Exception) as e:
+            # Deliberately broad. A 429 reaches here as a spotipy.SpotifyException
+            # or as a requests error carrying the status in its message, and this
+            # clause only converts that one case — everything else is re-raised
+            # unchanged by the bare `raise` below, so nothing is swallowed.
+            except Exception as e:
                 status = getattr(e, "http_status", None)
                 msg = str(e)
                 if status == 429 or "429" in msg:
