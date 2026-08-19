@@ -62,7 +62,15 @@ class Config:
             raise FileNotFoundError(f"Config file not found: {app_config_path}")
 
         config_data = _load_yaml_mapping(app_config_path)
-        services = config_data.get("services", {})
+        # Presence, not just type. Defaulting to {} made every service look
+        # enabled and then failed later with "Playlist not found for service:
+        # X", which names a symptom and not the cause.
+        if "services" not in config_data:
+            raise RuntimeError(
+                f"{app_config_path} has no 'services:' section, so there is nothing to sync. "
+                "Add one naming the services to run."
+            )
+        services = config_data["services"]
         if not isinstance(services, dict):
             raise RuntimeError(  # noqa: TRY004 — a hand-edited file, see _load_yaml_mapping
                 f"{app_config_path}: 'services' must be a mapping, not a {type(services).__name__}."

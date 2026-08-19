@@ -693,10 +693,14 @@ def test_get_artist_albums_fingerprint_rate_limit_propagates(svc):
 
 
 def test_get_artist_albums_none_response(svc):
-    """artist_albums returning None yields empty list."""
+    """A bodyless response is malformed, not an artist with no albums.
+
+    It used to answer [] and cache that for a week, so the artist quietly
+    vanished from the playlist on every later run.
+    """
     svc.spotify.artist_albums.return_value = None
-    albums = svc.get_artist_albums(Artist("a1", "A"))
-    assert albums == []
+    with pytest.raises(ApiResponseError):
+        svc.get_artist_albums(Artist("a1", "A"))
 
 
 # ---------------------------------------------------------------------------
@@ -771,10 +775,12 @@ def test_get_artist_top_tracks_rejects_a_non_list_tracks(svc):
         svc.get_artist_top_tracks(artist)
 
 
-def test_get_artist_top_tracks_missing_tracks_is_empty(svc):
+def test_get_artist_top_tracks_rejects_a_missing_tracks(svc):
+    """artist_top_tracks always carries "tracks"; an absent one is malformed."""
     svc.spotify.artist_top_tracks.return_value = {"other": []}
     artist = MagicMock(id="a1", name="Artist")
-    assert svc.get_artist_top_tracks(artist) == []
+    with pytest.raises(ApiResponseError, match="tracks is missing"):
+        svc.get_artist_top_tracks(artist)
 
 
 def test_malformed_response_names_the_service(svc):
@@ -824,3 +830,43 @@ def test_playlist_track_ids_rejects_a_non_string_id(svc):
     svc._call = MagicMock(return_value={"items": [{"track": {"id": 42}}]})
     with pytest.raises(ApiResponseError, match="not a string"):
         svc._SpotifyService__get_playlist_track_ids("pl1")
+
+
+# ---------------------------------------------------------------------------
+# Malformed responses must not become cached empty answers (#59 follow-up)
+# ---------------------------------------------------------------------------
+
+
+def test_get_artist_albums_rejects_a_missing_items(svc):
+    """An absent "items" used to cache [] for a week and drop the artist."""
+    svc.spotify.artist_albums.return_value = {"total": 5}
+    with pytest.raises(ApiResponseError, match="items is missing"):
+        svc.get_artist_albums(Artist("a1", "A"))
+
+
+def test_a_malformed_albums_response_is_not_cached(svc):
+    svc.spotify.artist_albums.return_value = {"total": 5}
+    with pytest.raises(ApiResponseError):
+        svc.get_artist_albums(Artist("a1", "A"))
+    assert svc.cache.read("artist:a1:albums") is None
+    assert svc.cache.read_stale("artist:a1:albums") is None
+
+
+def test_get_album_tracks_rejects_a_missing_items(svc):
+    svc.spotify.album_tracks.return_value = {"total": 5}
+    with pytest.raises(ApiResponseError, match="items is missing"):
+        svc.get_album_tracks(Album("alb1", "A"))
+
+
+def test_playlist_track_ids_rejects_a_short_page(svc):
+    """A page read as empty would end pagination and under-report the playlist."""
+    svc._call = MagicMock(return_value={"total": 100})
+    with pytest.raises(ApiResponseError, match="items is missing"):
+        svc._SpotifyService__get_playlist_track_ids("pl1")
+
+
+def test_get_playlist_id_for_name_rejects_a_missing_items(svc):
+    """Answering "not found" for a playlist that exists is worse than raising."""
+    svc._call = MagicMock(return_value={"total": 3})
+    with pytest.raises(ApiResponseError, match="items is missing"):
+        svc.get_playlist_id_for_name("My Playlist")

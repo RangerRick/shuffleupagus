@@ -271,3 +271,13 @@ def test_services_must_be_a_mapping(tmp_path, monkeypatch):
 
     with pytest.raises(RuntimeError, match="services"):
         Config()
+
+
+def test_missing_services_section_names_the_cause(tmp_path, monkeypatch):
+    """Defaulting to {} enabled every service, then failed with a symptom."""
+    cfg_dir = _configure_paths(tmp_path, monkeypatch)
+    (cfg_dir / "config.yaml").write_text(yaml.dump({"something-else": {}}))
+    (cfg_dir / "artists.yaml").write_text(yaml.dump({}))
+
+    with pytest.raises(RuntimeError, match="no 'services:' section"):
+        Config()

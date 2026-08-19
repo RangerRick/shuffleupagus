@@ -1403,10 +1403,16 @@ def test_get_album_tracks_rejects_a_non_numeric_duration(svc):
         svc.get_album_tracks(album)
 
 
-def test_get_album_tracks_missing_tracks_is_empty(svc):
+def test_get_album_tracks_rejects_a_missing_tracks(svc):
+    """get_album always carries "tracks"; an absent one is malformed.
+
+    Answering [] cached an empty album, hiding every song on it until the
+    entry expired.
+    """
     svc.client.get_album.return_value = {"other": []}
     album = MagicMock(id="alb1", name="Album")
-    assert svc.get_album_tracks(album) == []
+    with pytest.raises(ApiResponseError, match="tracks is missing"):
+        svc.get_album_tracks(album)
 
 
 def test_get_playlist_id_for_name_rejects_a_non_object_entry(svc):
@@ -1435,3 +1441,36 @@ def test_get_artist_albums_rejects_a_non_list_cache_hit(svc, cached):
     svc.cache.write("artist:" + artist.id + ":albums", cached)
     with pytest.raises(ApiResponseError, match="not a list"):
         svc.get_artist_albums(artist)
+
+
+# ---------------------------------------------------------------------------
+# Malformed playlist pages must not drive playlist mutations (#59 follow-up)
+# ---------------------------------------------------------------------------
+
+
+def test_playlist_items_rejects_a_missing_items(svc):
+    """A page read as empty ended pagination and under-reported the playlist.
+
+    __verify_playlist then treated the partial list as the whole playlist and
+    re-added every track below the cut, duplicating them.
+    """
+    svc._data_api_get = MagicMock(return_value={"pageInfo": {"totalResults": 50}})
+    with pytest.raises(ApiResponseError, match="items is missing"):
+        svc._YoutubeService__get_playlist_items("pl1", "contentDetails")
+
+
+def test_playlist_items_rejects_a_non_object_response(svc):
+    """api_has answers False for a list, and .get would then raise AttributeError."""
+    svc._data_api_get = MagicMock(return_value=["not", "an", "object"])
+    with pytest.raises(ApiResponseError, match="not an object"):
+        svc._YoutubeService__get_playlist_items("pl1", "contentDetails")
+
+
+def test_verify_playlist_rejects_an_entry_without_a_video_id(svc):
+    """part=contentDetails was requested, so an entry lacking it is malformed.
+
+    Dropping it made the video count as missing and get re-added.
+    """
+    svc._data_api_get = MagicMock(return_value={"items": [{"contentDetails": {}}]})
+    with pytest.raises(ApiResponseError, match="videoId is missing"):
+        svc._YoutubeService__verify_playlist("pl1", ["v1"])

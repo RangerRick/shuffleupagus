@@ -196,9 +196,12 @@ class SpotifyService(Service):
 
         if ret is None:
             album = self._call(self.spotify.artist_albums, artist.id)
-            if api_has(album, "items"):
-                ret = api_list(album, ("items",), _SERVICE_LABEL)
-            self.cache.write(cache_key, ret if ret is not None else [])
+            # "items" is not optional: /artists/{id}/albums answers a paging
+            # object, which always carries it. Treating an absent one as "no
+            # albums" cached [] for a week and dropped the artist from the
+            # playlist silently on every run after that.
+            ret = api_list(album, ("items",), _SERVICE_LABEL)
+            self.cache.write(cache_key, ret)
             # Spotify returns albums newest-first; ret[0] is the latest release.
             if ret:
                 first = api_object(ret[0], "items[0]", _SERVICE_LABEL)
@@ -219,8 +222,8 @@ class SpotifyService(Service):
         ret = self.cache.read(cache_key)
         if not ret:
             t = self._call(self.spotify.album_tracks, album.id)
-            if api_has(t, "items"):
-                ret = api_list(t, ("items",), _SERVICE_LABEL)
+            # Also a paging object; see get_artist_albums.
+            ret = api_list(t, ("items",), _SERVICE_LABEL)
             self.cache.write(cache_key, ret)
 
         tracks: list[Track] = []
@@ -274,7 +277,8 @@ class SpotifyService(Service):
             self.cache.write(cache_key, ret)
 
         tracks = []
-        if api_has(ret, "tracks"):
+        # artist_top_tracks always carries "tracks"; see get_artist_albums.
+        if ret is not None:
             for track in api_list(ret, ("tracks",), _SERVICE_LABEL):
                 track = api_object(track, "tracks[] entry", _SERVICE_LABEL)
                 album = self.get_album_by_id(api_str(track, ("album", "id"), _SERVICE_LABEL))
@@ -304,11 +308,13 @@ class SpotifyService(Service):
         offset = 0
         while True:
             results = self._call(self.spotify.current_user_playlists, limit=50, offset=offset)
-            items = api_list(results, ("items",), _SERVICE_LABEL) if api_has(results, "items") else []
+            items = api_list(results, ("items",), _SERVICE_LABEL)
             for item in items:
                 entry = api_object(item, "items[] entry", _SERVICE_LABEL)
                 if entry.get("name") == playlist_name:
                     return api_str(entry, ("id",), _SERVICE_LABEL)
+            # A page read as empty would end the loop and raise "Playlist not
+            # found" for a playlist that exists, so "items" is required here.
             if len(items) < 50:
                 break
             offset += 50
@@ -326,7 +332,7 @@ class SpotifyService(Service):
                 limit=100,
                 offset=offset,
             )
-            items = api_list(results, ("items",), _SERVICE_LABEL) if api_has(results, "items") else []
+            items = api_list(results, ("items",), _SERVICE_LABEL)
             for item in items:
                 entry = api_object(item, "items[] entry", _SERVICE_LABEL)
                 # A null "track" is normal here: Spotify sends one for a track

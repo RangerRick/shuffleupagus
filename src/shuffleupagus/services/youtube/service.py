@@ -497,7 +497,10 @@ class YoutubeService(Service):
             self.cache.write(cache_key, ret)
 
         tracks: list[Track] = []
-        if api_has(ret, "tracks"):
+        # get_album always carries "tracks"; an absent one is a malformed
+        # response, not an album with no songs, and caching it as empty would
+        # hide the album for the life of the entry.
+        if ret is not None:
             for track in api_list(ret, ("tracks",), _SERVICE_LABEL):
                 track = api_object(track, "tracks[] entry", _SERVICE_LABEL)
                 youtubeTrack = YoutubeTrack(
@@ -547,7 +550,8 @@ class YoutubeService(Service):
             if page_token:
                 params["pageToken"] = page_token
             data = self._data_api_get("https://www.googleapis.com/youtube/v3/playlists", params)
-            for item in api_list(data, ("items",), _SERVICE_LABEL) if api_has(data, "items") else []:
+            data = api_object(data, "playlists response", _SERVICE_LABEL)
+            for item in api_list(data, ("items",), _SERVICE_LABEL):
                 entry = api_object(item, "items[] entry", _SERVICE_LABEL)
                 if api_str(entry, ("snippet", "title"), _SERVICE_LABEL) == playlist_name:
                     return api_str(entry, ("id",), _SERVICE_LABEL)
@@ -565,7 +569,15 @@ class YoutubeService(Service):
             if page_token:
                 params["pageToken"] = page_token
             data = self._data_api_get("https://www.googleapis.com/youtube/v3/playlistItems", params)
-            page = api_list(data, ("items",), _SERVICE_LABEL) if api_has(data, "items") else []
+            # Checked before either read: api_has answers False for a list, and
+            # the .get below would then raise AttributeError — the raw failure
+            # these helpers replace, one line after the guard.
+            data = api_object(data, "playlistItems response", _SERVICE_LABEL)
+            # "items" is mandatory, and load-bearing: __verify_playlist treats
+            # what this returns as the complete playlist. A page read as empty
+            # ends the loop early, and every entry past that point then looks
+            # missing and gets re-added as a duplicate in the user's playlist.
+            page = api_list(data, ("items",), _SERVICE_LABEL)
             items.extend(api_object(item, "items[] entry", _SERVICE_LABEL) for item in page)
             page_token = data.get("nextPageToken")
             if not page_token:
@@ -588,10 +600,12 @@ class YoutubeService(Service):
         """Confirm every video reached the playlist, re-adding any that did not."""
         expected = set(expected_ids)
         for round_num in range(self._MAX_VERIFY_ROUNDS + 1):
+            # No api_has filter: part=contentDetails was requested, so an entry
+            # without contentDetails.videoId is malformed. Dropping it made the
+            # video count as missing and get re-added, duplicating it.
             actual = {
                 api_str(item, ("contentDetails", "videoId"), _SERVICE_LABEL)
                 for item in self.__get_playlist_items(playlist_id, "contentDetails")
-                if api_has(item.get("contentDetails"), "videoId")
             }
             missing = expected - actual
             if not missing:
