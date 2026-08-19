@@ -2,7 +2,7 @@
 
 import pytest
 
-from shuffleupagus.core.apiresponse import ApiResponseError, api_field, api_int, api_list
+from shuffleupagus.core.apiresponse import ApiResponseError, api_field, api_int, api_list, api_object, api_str
 
 SERVICE = "Apple Music"
 
@@ -113,3 +113,39 @@ def test_list_rejects_other_types_by_name(raw):
 def test_api_response_error_is_a_value_error():
     """Callers already catching ValueError keep working."""
     assert issubclass(ApiResponseError, ValueError)
+
+
+# --- api_object --------------------------------------------------------------
+
+
+def test_object_returns_the_dict():
+    assert api_object({"id": "x"}, "data[] entry", SERVICE) == {"id": "x"}
+
+
+def test_object_accepts_an_empty_dict():
+    assert api_object({}, "data[] entry", SERVICE) == {}
+
+
+@pytest.mark.parametrize("value", ["text", 42, None, [1], True])
+def test_object_rejects_everything_else_by_name(value):
+    """There is no default: a wrong-typed entry must not read as an absent one."""
+    with pytest.raises(ApiResponseError) as caught:
+        api_object(value, "data[] entry", SERVICE)
+    message = str(caught.value)
+    assert SERVICE in message
+    assert "data[] entry" in message
+    assert "not an object" in message
+
+
+# --- api_str -----------------------------------------------------------------
+
+
+def test_str_returns_the_string():
+    assert api_str({"id": "pl1"}, ("id",), SERVICE) == "pl1"
+
+
+@pytest.mark.parametrize("value", [3, None, {"a": 1}, ["x"], True])
+def test_str_rejects_non_strings(value):
+    """str() would turn a dict into an identifier-shaped string and pass it to a URL."""
+    with pytest.raises(ApiResponseError, match="not a string"):
+        api_str({"id": value}, ("id",), SERVICE)

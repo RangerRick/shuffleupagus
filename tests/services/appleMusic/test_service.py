@@ -463,6 +463,28 @@ def test_get_playlist_id_for_name_entry_without_id_names_the_field(svc):
     assert "missing" in str(caught.value)
 
 
+@pytest.mark.parametrize("entry", ["not an object", 42, None, ["nested"]])
+def test_get_playlist_id_for_name_non_object_entry_is_reported(svc, entry):
+    """A malformed entry must not degrade into a misleading 'not found' after retries."""
+    _mock_session_get(svc, [entry])
+    with pytest.raises(ValueError) as caught:
+        svc.get_playlist_id_for_name("My Playlist")
+    message = str(caught.value)
+    assert "Apple Music" in message
+    assert "not an object" in message
+
+
+def test_get_playlist_length_2xx_without_meta_names_the_field(svc):
+    """A success body missing meta is a shape problem, not something to retry."""
+    _mock_session_get(svc, error_json={"data": []})
+    with pytest.raises(ValueError) as caught:
+        svc._AppleMusicService__get_playlist_length("pl1")
+    message = str(caught.value)
+    assert "Apple Music" in message
+    assert "meta.total" in message
+    assert "missing" in message
+
+
 def test_get_playlist_length_non_numeric_total_names_the_field(svc):
     _mock_session_get(svc, error_json={"meta": {"total": "many"}})
     with pytest.raises(ValueError) as caught:

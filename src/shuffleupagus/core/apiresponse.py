@@ -63,6 +63,18 @@ def api_str(payload: object, path: Sequence[str], service: str) -> str:
     return value
 
 
+def api_object(value: object, what: str, service: str) -> dict:
+    """Return a value that must be an object, naming what it was instead.
+
+    Takes the value rather than a path, for checking an element of a list. There
+    is deliberately no default: treating a wrong-typed entry as absent is how a
+    malformed response becomes a confusing "not found" three retries later.
+    """
+    if not isinstance(value, dict):
+        raise ApiResponseError(f"{service} response {what} is not an object: {type(value).__name__}")
+    return value
+
+
 def api_list(payload: object, path: Sequence[str], service: str) -> list:
     """Return a field that must be a list, or raise naming what it held instead."""
     value = api_field(payload, path, service)

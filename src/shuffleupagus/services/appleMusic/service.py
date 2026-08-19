@@ -5,7 +5,7 @@ from concurrent.futures import as_completed
 import applemusicpy
 import applescript
 
-from ...core.apiresponse import api_int, api_list, api_str
+from ...core.apiresponse import api_int, api_list, api_object, api_str
 from ...core.model import Album, Artist, Service, Track
 from ...core.util import logger, parse_retry_after
 from .model import AppleMusicAlbum, AppleMusicArtist, AppleMusicTrack, sanitize_id
@@ -320,18 +320,15 @@ class AppleMusicService(Service):
                 timeout=self.client.session_length,
             )
             if r.status_code >= 200 and r.status_code < 300:
-                j = r.json()
-                if "meta" in j:
-                    return api_int(j, ("meta", "total"), _SERVICE_LABEL)
-            else:
-                # instead of returning 0 values, the API throws a 404 with a "No related resources" error
-                if r.json()["errors"] and len(r.json()["errors"]) > 0:
-                    if "code" in r.json()["errors"][0] and r.json()["errors"][0]["code"] == "40403":
-                        return 0
+                return api_int(r.json(), ("meta", "total"), _SERVICE_LABEL)
+            # instead of returning 0 values, the API throws a 404 with a "No related resources" error
+            if r.json()["errors"] and len(r.json()["errors"]) > 0:
+                if "code" in r.json()["errors"][0] and r.json()["errors"][0]["code"] == "40403":
+                    return 0
 
-                logger.error(f"{self.tag}  ! error fetching playlist: {r.status_code} {r.reason}")
-                if len(r.text.strip()) > 0:
-                    logger.error(f"{self.tag}{r.text}")
+            logger.error(f"{self.tag}  ! error fetching playlist: {r.status_code} {r.reason}")
+            if len(r.text.strip()) > 0:
+                logger.error(f"{self.tag}{r.text}")
         raise Exception("Failed to fetch playlist length after 3 retries")
 
     def get_playlist_id_for_name(self, playlist_name: str) -> str:
@@ -346,9 +343,10 @@ class AppleMusicService(Service):
             )
             if r.status_code >= 200 and r.status_code < 300:
                 for playlist in api_list(r.json(), ("data",), _SERVICE_LABEL):
-                    attrs = playlist.get("attributes", {}) if isinstance(playlist, dict) else {}
+                    entry = api_object(playlist, "data[] entry", _SERVICE_LABEL)
+                    attrs = entry.get("attributes") or {}
                     if attrs.get("name") == playlist_name:
-                        return api_str(playlist, ("id",), _SERVICE_LABEL)
+                        return api_str(entry, ("id",), _SERVICE_LABEL)
             else:
                 logger.error(f"{self.tag}  ! error fetching playlists: {r.status_code} {r.reason}")
                 if len(r.text.strip()) > 0:
