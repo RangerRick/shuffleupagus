@@ -1,11 +1,10 @@
 """Tests for the top-level orchestration helpers."""
 
-import sqlite3
 from unittest.mock import MagicMock
 
 import pytest
 
-from shuffleupagus.core.cache import Cache
+from shuffleupagus.core.cache import Cache, CacheClosedError
 from shuffleupagus.core.model import Service
 from shuffleupagus.shuffleupagus import _close_service
 
@@ -19,7 +18,7 @@ def test_service_close_releases_cache_connection(tmp_path, monkeypatch):
 
     svc.close()
 
-    with pytest.raises(sqlite3.ProgrammingError):
+    with pytest.raises(CacheClosedError):
         svc.cache.read("k")
 
 
@@ -58,7 +57,7 @@ def test_service_close_with_no_pools_created(tmp_path, monkeypatch):
 
     svc.close()
 
-    with pytest.raises(sqlite3.ProgrammingError):
+    with pytest.raises(CacheClosedError):
         svc.cache.read("k")
 
 
