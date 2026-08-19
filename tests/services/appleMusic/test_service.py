@@ -1209,3 +1209,40 @@ def test_get_artist_tracks_cancels_queued_work_when_aborting(svc):
     finally:
         release.set()
         pool.shutdown(wait=True)
+
+
+# ---------------------------------------------------------------------------
+# login: the secret-key filename stays inside the config directory (#76)
+# ---------------------------------------------------------------------------
+
+
+def test_login_refuses_a_secret_key_that_leaves_the_config_dir(svc):
+    """`secret-key` is user-supplied config, so it gets the same guard auth-file has.
+
+    YouTube already routes its equivalent through get_filepath; this one built
+    the path with os.path.join and never checked where it landed.
+    """
+    svc.config = {"secret-key": "../../.ssh/id_rsa", "key-id": "k", "team-id": "t"}
+    with pytest.raises(ValueError, match="Path traversal"):
+        svc.login()
+
+
+def test_login_reads_the_key_from_the_config_dir(svc, tmp_path):
+    """The ordinary path still works, and it resolves under the config directory."""
+    keyfile = tmp_path / "authkey.p8"
+    keyfile.write_text("  secret-contents  \n")
+    svc.config = {"secret-key": "authkey.p8", "key-id": "k", "team-id": "t"}
+
+    with (
+        patch(
+            "shuffleupagus.services.appleMusic.service.get_filepath",
+            return_value=str(keyfile),
+        ) as get_path,
+        patch("shuffleupagus.services.appleMusic.service.applemusicpy.AppleMusic") as client,
+        patch.object(AppleMusicService, "_check_rate_limit"),
+    ):
+        svc.login()
+
+    get_path.assert_called_once_with("authkey.p8")
+    passed_key = client.call_args.kwargs["secret_key"]
+    assert passed_key == "secret-contents"
