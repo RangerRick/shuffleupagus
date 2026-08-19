@@ -65,10 +65,14 @@ class Cache:
         sqlite reports nothing wrong in that case — the row reads back fine and
         json.loads is what fails — so this is the same disposable-cache failure
         as a DatabaseError and takes the same path.
+
+        Both error types are caught because the column is not declared STRICT:
+        text that is not JSON raises ValueError, and a row holding a number or
+        NULL instead of text raises TypeError.
         """
         try:
             return json.loads(value)
-        except ValueError as exc:
+        except (TypeError, ValueError) as exc:
             self._degrade("decoding", exc)
             return None
 

@@ -446,3 +446,14 @@ def test_corrupt_json_is_reported(cache, capsys):
     capsys.readouterr()
     cache.read("key1")
     assert "unusable" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("stored", [12345, 3.5, None, b"\xff\xfe"])
+def test_decode_survives_a_non_text_value(cache, stored):
+    """A corrupt database file can return a value that is not text.
+
+    The column is declared TEXT NOT NULL, so sqlite's own affinity rules stop
+    this being reachable through a normal statement — which is why _decode is
+    exercised directly. File corruption does not go through those rules.
+    """
+    assert cache._decode(stored) is None
