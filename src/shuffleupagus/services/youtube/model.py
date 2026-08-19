@@ -1,7 +1,7 @@
 from collections.abc import Sequence
 
 from ...core import model
-from ...core.apiresponse import api_int
+from ...core.apiresponse import ApiResponseError, api_int, api_list, api_object, api_str
 
 # Named in every message raised from an unexpected API response.
 _SERVICE_LABEL = "YouTube"
@@ -49,18 +49,23 @@ class YoutubeArtist(model.Artist):
 
     @staticmethod
     def from_dict(obj):
-        ret = YoutubeArtist(obj["channelId"], obj["name"])
-        if "albums" in obj:
-            ret.browseIds["albums"] = obj["albums"].get("browseId")
-            ret.params["albums"] = obj["albums"].get("params")
-            ret.inlineAlbums = obj["albums"].get("results", [])
-        if "singles" in obj:
-            ret.browseIds["singles"] = obj["singles"].get("browseId")
-            ret.params["singles"] = obj["singles"].get("params")
-            ret.inlineAlbums += obj["singles"].get("results", [])
-        if "songs" in obj:
-            ret.browseIds["songs"] = obj["songs"].get("browseId")
-            ret.params["songs"] = obj["songs"].get("params")
+        # Before any `in obj` test — see the note in SpotifyTrack.from_dict.
+        obj = api_object(obj, "artist", _SERVICE_LABEL)
+        ret = YoutubeArtist(
+            api_str(obj, ("channelId",), _SERVICE_LABEL),
+            api_str(obj, ("name",), _SERVICE_LABEL),
+        )
+        # Each of these three sections is optional — ytmusicapi includes only
+        # the ones the artist actually has — but a section that is present and
+        # is not an object would otherwise fail on .get() with an AttributeError.
+        for section in ("albums", "singles", "songs"):
+            if section not in obj:
+                continue
+            entry = api_object(obj[section], section, _SERVICE_LABEL)
+            ret.browseIds[section] = entry.get("browseId")
+            ret.params[section] = entry.get("params")
+            if section != "songs":
+                ret.inlineAlbums += api_list(entry, ("results",), _SERVICE_LABEL) if "results" in entry else []
         return ret
 
 
@@ -77,6 +82,8 @@ class YoutubeAlbum(model.Album):
 
     @staticmethod
     def from_dict(obj):
+        # Before any .get() — see the note in SpotifyTrack.from_dict.
+        obj = api_object(obj, "album", _SERVICE_LABEL)
         # ytmusicapi returns different ID fields depending on the context:
         # - get_artist_albums returns 'browseId'
         # - get_album returns 'audioPlaylistId' or 'id'
@@ -88,8 +95,14 @@ class YoutubeAlbum(model.Album):
         def _as_year(val: str | None) -> str | None:
             return val if (val and val.isdigit() and len(val) == 4) else None
 
+        if not isinstance(album_id, str):
+            raise ApiResponseError(
+                f"{_SERVICE_LABEL} response album has no usable ID: "
+                "none of browseId, audioPlaylistId, or id held a string"
+            )
+
         year = _as_year(obj.get("year")) or _as_year(obj.get("type"))
-        return YoutubeAlbum(album_id, obj["title"], year)
+        return YoutubeAlbum(album_id, api_str(obj, ("title",), _SERVICE_LABEL), year)
 
 
 class YoutubeTrack(model.Track):
@@ -115,11 +128,13 @@ class YoutubeTrack(model.Track):
 
     @staticmethod
     def from_dict(obj):
+        # Before any `in obj` test — see the note in SpotifyTrack.from_dict.
+        obj = api_object(obj, "track", _SERVICE_LABEL)
         if "videoId" in obj:
             # this track comes from an album track list
             return YoutubeTrack(
-                id=obj["videoId"],
-                name=obj["title"],
+                id=api_str(obj, ("videoId",), _SERVICE_LABEL),
+                name=api_str(obj, ("title",), _SERVICE_LABEL),
                 duration_ms=(api_int(obj, ("duration_seconds",), _SERVICE_LABEL) * 1000),
                 # isrc=obj.get('isrc'),
                 # album=YoutubeAlbum.from_dict(obj['album']),
@@ -128,11 +143,14 @@ class YoutubeTrack(model.Track):
         if "videoDetails" in obj:
             # this track comes from a direct track lookup
             return YoutubeTrack(
-                id=obj["videoDetails"]["videoId"],
-                name=obj["videoDetails"]["title"],
+                id=api_str(obj, ("videoDetails", "videoId"), _SERVICE_LABEL),
+                name=api_str(obj, ("videoDetails", "title"), _SERVICE_LABEL),
                 duration_ms=(api_int(obj, ("videoDetails", "lengthSeconds"), _SERVICE_LABEL) * 1000),
                 # isrc=obj.get('isrc'),
                 # album=YoutubeAlbum.from_dict(obj['videoDetails']['album']),
                 # artists=[YoutubeArtist.from_dict(artist) for artist in obj['videoDetails'].get('artists', [])]
             )
-        raise ValueError("Invalid track object")
+        raise ApiResponseError(
+            f"{_SERVICE_LABEL} response track has neither a videoId nor a videoDetails section, "
+            "so it is not a track this code can read"
+        )
