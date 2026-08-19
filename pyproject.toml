@@ -2,7 +2,10 @@
 name = "shuffleupagus"
 version = "1.1.0"
 description = "generate and synchronize smart, balanced playlists"
-requires-python = ">=3.14.7"
+# The floor is a language-level requirement: PEP 758's parenthesis-free `except`
+# is 3.14.0. Do not raise it to a patch release — Dependabot cannot satisfy a
+# patch floor and stops submitting the dependency graph. See #65.
+requires-python = ">=3.14"
 
 dependencies = [
   "colorama                 >= 0.4.6",
