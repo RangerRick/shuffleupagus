@@ -9,6 +9,7 @@ import spotipy
 from spotipy.oauth2 import SpotifyOAuth
 from urllib3.util.retry import Retry
 
+from ...core.apiresponse import api_array, api_has, api_int, api_list, api_object, api_str
 from ...core.model import Album, Artist, Service, Track
 from ...core.util import logger, parse_retry_after
 from .model import SpotifyAlbum, SpotifyArtist, SpotifyTrack, sanitize_id
@@ -16,6 +17,9 @@ from .model import SpotifyAlbum, SpotifyArtist, SpotifyTrack, sanitize_id
 # Fingerprint TTL: how long before we re-check whether a new album has been released.
 # Short enough to catch new releases, long enough to avoid hammering the API every run.
 _FINGERPRINT_TTL = 60 * 60 * 24  # 24 hours
+
+# Named in every message raised from an unexpected API response.
+_SERVICE_LABEL = "Spotify"
 
 _REQUEST_TIMEOUT = 30
 
@@ -173,8 +177,9 @@ class SpotifyService(Service):
             if stale is not None:
                 try:
                     latest = self._call(self.spotify.artist_albums, artist.id, limit=1)
-                    if latest and "items" in latest and latest["items"]:
-                        latest_id = latest["items"][0]["id"]
+                    items = api_list(latest, ("items",), _SERVICE_LABEL) if api_has(latest, "items") else []
+                    if items:
+                        latest_id = api_str(api_object(items[0], "items[0]", _SERVICE_LABEL), ("id",), _SERVICE_LABEL)
                         cached_fp = self.cache.read_stale(fp_key)
                         if cached_fp == latest_id:
                             logger.debug(f"{self.tag}* fingerprint match for {artist.name}, extending cache")
@@ -191,17 +196,23 @@ class SpotifyService(Service):
 
         if ret is None:
             album = self._call(self.spotify.artist_albums, artist.id)
-            if album is not None and "items" in album:
-                ret = album["items"]
-            self.cache.write(cache_key, ret if ret is not None else [])
+            # "items" is not optional: /artists/{id}/albums answers a paging
+            # object, which always carries it. Treating an absent one as "no
+            # albums" cached [] for a week and dropped the artist from the
+            # playlist silently on every run after that.
+            ret = api_list(album, ("items",), _SERVICE_LABEL)
+            self.cache.write(cache_key, ret)
             # Spotify returns albums newest-first; ret[0] is the latest release.
             if ret:
-                self.cache.write(fp_key, ret[0]["id"], ttl=_FINGERPRINT_TTL)
+                first = api_object(ret[0], "items[0]", _SERVICE_LABEL)
+                self.cache.write(fp_key, api_str(first, ("id",), _SERVICE_LABEL), ttl=_FINGERPRINT_TTL)
 
         albums = []
         if ret:
-            for album in ret:
-                albums.append(SpotifyAlbum.from_dict(album))
+            # Checked after the branches merge, not inside the fetch branch: ret
+            # can also come from the cache, which holds the same untrusted JSON.
+            for album in api_array(ret, "artist albums", _SERVICE_LABEL):
+                albums.append(SpotifyAlbum.from_dict(api_object(album, "items[] entry", _SERVICE_LABEL)))
 
         return albums
 
@@ -211,26 +222,35 @@ class SpotifyService(Service):
         ret = self.cache.read(cache_key)
         if not ret:
             t = self._call(self.spotify.album_tracks, album.id)
-            if t is not None and "items" in t:
-                ret = t["items"]
+            # Also a paging object; see get_artist_albums.
+            ret = api_list(t, ("items",), _SERVICE_LABEL)
             self.cache.write(cache_key, ret)
 
         tracks: list[Track] = []
         if ret:
-            for track in ret:
+            # See get_artist_albums: ret can be a cache hit, so the container is
+            # checked here rather than only on the fetch branch.
+            for track in api_array(ret, "album tracks", _SERVICE_LABEL):
+                track = api_object(track, "items[] entry", _SERVICE_LABEL)
                 isrc = None
-                if "external_ids" in track and "isrc" in track["external_ids"]:
-                    isrc = str(track["external_ids"]["isrc"])
+                # "external_ids" is optional, but a present one that is not an
+                # object is malformed rather than absent. api_has answers False
+                # for both, which would mask the second silently.
+                if "external_ids" in track:
+                    external_ids = api_object(track["external_ids"], "external_ids", _SERVICE_LABEL)
+                    if "isrc" in external_ids:
+                        isrc = api_str(external_ids, ("isrc",), _SERVICE_LABEL)
 
                 spotifyTrack = SpotifyTrack(
-                    id=track["id"],
-                    name=track["name"],
-                    duration_ms=track["duration_ms"],
+                    id=api_str(track, ("id",), _SERVICE_LABEL),
+                    name=api_str(track, ("name",), _SERVICE_LABEL),
+                    duration_ms=api_int(track, ("duration_ms",), _SERVICE_LABEL),
                     isrc=isrc,
                     album=album,
                 )
-                for artist in track["artists"]:
-                    spotifyTrack.artists.append(self.get_artist(artist["id"]))
+                for artist in api_list(track, ("artists",), _SERVICE_LABEL):
+                    entry = api_object(artist, "artists[] entry", _SERVICE_LABEL)
+                    spotifyTrack.artists.append(self.get_artist(api_str(entry, ("id",), _SERVICE_LABEL)))
                 tracks.append(spotifyTrack)
 
         return tracks
@@ -262,23 +282,28 @@ class SpotifyService(Service):
             self.cache.write(cache_key, ret)
 
         tracks = []
-        if ret is not None and "tracks" in ret:
-            for track in ret["tracks"]:
-                album = self.get_album_by_id(track["album"]["id"])
+        # artist_top_tracks always carries "tracks"; see get_artist_albums.
+        if ret is not None:
+            for track in api_list(ret, ("tracks",), _SERVICE_LABEL):
+                track = api_object(track, "tracks[] entry", _SERVICE_LABEL)
+                album = self.get_album_by_id(api_str(track, ("album", "id"), _SERVICE_LABEL))
 
                 isrc = None
-                if "external_ids" in track and "isrc" in track["external_ids"]:
-                    isrc = track["external_ids"]["isrc"]
+                # See get_album_tracks: present-but-malformed is not absent.
+                if "external_ids" in track:
+                    external_ids = api_object(track["external_ids"], "external_ids", _SERVICE_LABEL)
+                    if "isrc" in external_ids:
+                        isrc = api_str(external_ids, ("isrc",), _SERVICE_LABEL)
 
                 artists = []
-                for a in track["artists"]:
-                    a = self.get_artist(a["id"])
-                    artists.append(a)
+                for a in api_list(track, ("artists",), _SERVICE_LABEL):
+                    entry = api_object(a, "tracks[].artists[] entry", _SERVICE_LABEL)
+                    artists.append(self.get_artist(api_str(entry, ("id",), _SERVICE_LABEL)))
 
                 spotifyTrack = SpotifyTrack(
-                    id=track["id"],
-                    name=track["name"],
-                    duration_ms=track["duration_ms"],
+                    id=api_str(track, ("id",), _SERVICE_LABEL),
+                    name=api_str(track, ("name",), _SERVICE_LABEL),
+                    duration_ms=api_int(track, ("duration_ms",), _SERVICE_LABEL),
                     isrc=isrc,
                     album=album,
                     artists=artists,
@@ -291,12 +316,14 @@ class SpotifyService(Service):
         offset = 0
         while True:
             results = self._call(self.spotify.current_user_playlists, limit=50, offset=offset)
-            if results and "items" in results:
-                items = results["items"]
-                for item in items:
-                    if item["name"] == playlist_name:
-                        return item["id"]
-            if not results or len(results["items"]) < 50:
+            items = api_list(results, ("items",), _SERVICE_LABEL)
+            for item in items:
+                entry = api_object(item, "items[] entry", _SERVICE_LABEL)
+                if entry.get("name") == playlist_name:
+                    return api_str(entry, ("id",), _SERVICE_LABEL)
+            # A page read as empty would end the loop and raise "Playlist not
+            # found" for a playlist that exists, so "items" is required here.
+            if len(items) < 50:
                 break
             offset += 50
         raise ValueError(f"Playlist not found: {playlist_name}")
@@ -313,11 +340,20 @@ class SpotifyService(Service):
                 limit=100,
                 offset=offset,
             )
-            items = results.get("items", []) if results else []
+            items = api_list(results, ("items",), _SERVICE_LABEL)
             for item in items:
-                track = item.get("track") or {}
-                if track.get("id"):
-                    ids.append(track["id"])
+                entry = api_object(item, "items[] entry", _SERVICE_LABEL)
+                # A null "track" is normal here: Spotify sends one for a track
+                # that has been removed from the catalogue but is still listed.
+                # A "track" that is present and is not an object is not normal,
+                # so it is reported rather than skipped along with the nulls.
+                raw_track = entry.get("track")
+                if raw_track is None:
+                    continue
+                track = api_object(raw_track, "items[].track", _SERVICE_LABEL)
+                # A null ID means a local file, which has no catalogue ID to match.
+                if track.get("id") is not None:
+                    ids.append(api_str(track, ("id",), _SERVICE_LABEL))
             if len(items) < 100:
                 break
             offset += 100

@@ -16,6 +16,17 @@ class CacheClosedError(RuntimeError):
     """
 
 
+class CacheUnavailableError(RuntimeError):
+    """The cache could not serve a value the caller cannot rebuild.
+
+    Most of what the cache holds is a copy of something a service will happily
+    send again, so a broken cache costs a slower run and nothing else. Some of
+    it is not: a recorded rate-limit window exists precisely because the API
+    will not answer again. Losing that silently walks the next run into an API
+    that has already refused it, so those callers ask for the failure.
+    """
+
+
 class Cache:
     """A sqlite-backed key/value cache with a TTL.
 
@@ -38,21 +49,102 @@ class Cache:
         self.cutoff = cutoff
         self._lock = threading.Lock()
         self._closed = False
+        self._degraded = False
+        self._reported: set[str] = set()
         print(f"* loading '{name}' cache", flush=True)
         path = self._db_path()
         os.makedirs(os.path.dirname(path), exist_ok=True)
         self._conn = sqlite3.connect(path, check_same_thread=False)
-        self._conn.execute("PRAGMA journal_mode=WAL")
-        self._conn.execute("PRAGMA synchronous=NORMAL")
-        self._conn.execute(
-            """CREATE TABLE IF NOT EXISTS cache (
-                key       TEXT PRIMARY KEY,
-                value     TEXT NOT NULL,
-                stored_at REAL NOT NULL,
-                ttl       REAL NOT NULL
-            )"""
+        try:
+            self._conn.execute("PRAGMA journal_mode=WAL")
+            self._conn.execute("PRAGMA synchronous=NORMAL")
+            self._conn.execute(
+                """CREATE TABLE IF NOT EXISTS cache (
+                    key       TEXT PRIMARY KEY,
+                    value     TEXT NOT NULL,
+                    stored_at REAL NOT NULL,
+                    ttl       REAL NOT NULL
+                )"""
+            )
+            self._conn.commit()
+        except sqlite3.DatabaseError as exc:
+            self._degrade("opening", exc)
+
+    def _decode(self, value: str, required: bool = False):
+        """Decode a stored value, degrading to a miss if it is not valid JSON.
+
+        A corrupt database can return a row whose value is not what was written.
+        sqlite reports nothing wrong in that case — the row reads back fine and
+        json.loads is what fails — so this is the same disposable-cache failure
+        as a DatabaseError and takes the same path.
+
+        Both error types are caught because the column is not declared STRICT:
+        text that is not JSON raises ValueError, and a row holding a number or
+        NULL instead of text raises TypeError.
+        """
+        try:
+            return json.loads(value)
+        except (TypeError, ValueError) as exc:
+            self._degrade("decoding", exc)
+            return self._unusable(required, "decoded")
+
+    def _degrade(self, operation: str, exc: Exception) -> None:
+        """Mark the cache unusable and say so, then let the run continue.
+
+        Most of what the cache holds can be fetched again from the service it
+        came from, so a corrupt or unwritable file costs a slower run rather
+        than a wrong one. Callers holding a value that cannot be rebuilt pass
+        required=True and get CacheUnavailableError instead.
+
+        Once this fires the cache stops touching the database at all. Reporting
+        the failure but continuing to issue statements leaves it flaky rather
+        than cold: some succeed, some do not, and no caller can tell which
+        answers it is getting.
+
+        One message per distinct failure, keyed by exception class. A single
+        latch would report "database is locked" and then stay quiet through a
+        later "disk image is malformed", which is the more serious of the two
+        and the one naming the real remedy.
+        """
+        if isinstance(exc, sqlite3.ProgrammingError):
+            # A wrong binding count or bad SQL is a bug in this file, not a
+            # broken file on disk. Degrading would hide it behind a cache miss,
+            # and the tests assert miss-equivalent values, so it would pass them.
+            raise exc
+
+        self._degraded = True
+        kind = type(exc).__name__
+        if kind in self._reported:
+            return
+        self._reported.add(kind)
+        print(
+            f"! cache '{self.name}' is unusable, continuing without it ({operation}): {str(exc)!r:.60}. "
+            f"{self._remedy(exc)}",
+            flush=True,
         )
-        self._conn.commit()
+
+    def _remedy(self, exc: Exception) -> str:
+        """Advice that fits the failure, or none at all.
+
+        Telling the user to delete the database is right for corruption and
+        actively harmful for a lock: another shuffleupagus process is using
+        that file, and deleting it destroys that run's cache.
+        """
+        if isinstance(exc, sqlite3.OperationalError) and "locked" in str(exc):
+            return "Another shuffleupagus process is probably using it; wait for that run to finish."
+        return f"Delete {self._db_path()} to rebuild it."
+
+    def _unusable(self, required: bool, operation: str):
+        """Answer for an operation the cache can no longer perform.
+
+        Returns None for callers that can rebuild the value, which reads as a
+        miss. Raises for callers that cannot.
+        """
+        if required:
+            raise CacheUnavailableError(
+                f"cache '{self.name}' is unusable, and the value being {operation} cannot be rebuilt. "
+                f"{self._remedy(sqlite3.DatabaseError())}"
+            )
 
     def _db_path(self):
         return os.path.expanduser(f"~/.cache/shuffleupagus/{self.name}.db")
@@ -72,69 +164,138 @@ class Cache:
         if self._closed:
             raise CacheClosedError(f"cache '{self.name}' is closed")
 
-    def read(self, key: str):
-        """Return the cached value if present and not expired, else None."""
+    def read(self, key: str, required: bool = False):
+        """Return the cached value if present and not expired, else None.
+
+        A database failure answers None, the same as a miss, unless the caller
+        passes required=True — see CacheUnavailableError.
+        """
         with self._lock:
             self._require_open()
-            row = self._conn.execute(
-                "SELECT value, stored_at, ttl FROM cache WHERE key = ?",
-                (key,),
-            ).fetchone()
-        if row is None:
+            if self._degraded:
+                return self._unusable(required, "read")
+            try:
+                row = self._conn.execute(
+                    "SELECT value, stored_at, ttl FROM cache WHERE key = ?",
+                    (key,),
+                ).fetchone()
+                if row is None:
+                    return None
+                # Unpacked and compared inside the guard: the columns are not
+                # STRICT, so a corrupt row can hold text where a time should be,
+                # and the subtraction below would then raise TypeError.
+                value, stored_at, ttl = row
+                expired = time.time() - stored_at > ttl
+            except sqlite3.DatabaseError as exc:
+                self._degrade("reading", exc)
+                return self._unusable(required, "read")
+            except (TypeError, ValueError) as exc:
+                self._degrade("reading", exc)
+                return self._unusable(required, "read")
+        if expired:
             return None
-        value, stored_at, ttl = row
-        if time.time() - stored_at > ttl:
-            return None
-        return json.loads(value)
+        return self._decode(value, required)
 
-    def read_stale(self, key: str):
-        """Return the cached value regardless of TTL, or None if absent."""
+    def read_stale(self, key: str, required: bool = False):
+        """Return the cached value regardless of TTL, or None if absent.
+
+        required=True turns a database failure into CacheUnavailableError
+        rather than an answer indistinguishable from "no such key".
+        """
         with self._lock:
             self._require_open()
-            row = self._conn.execute("SELECT value FROM cache WHERE key = ?", (key,)).fetchone()
+            if self._degraded:
+                return self._unusable(required, "read")
+            try:
+                row = self._conn.execute("SELECT value FROM cache WHERE key = ?", (key,)).fetchone()
+            except sqlite3.DatabaseError as exc:
+                self._degrade("reading", exc)
+                return self._unusable(required, "read")
         if row is None:
             return None
-        return json.loads(row[0])
+        return self._decode(row[0], required)
 
-    def write(self, key: str, obj, ttl: float | None = None):
+    def write(self, key: str, obj, ttl: float | None = None, required: bool = False):
+        """Store a value and return it.
+
+        The value is returned whether or not the store succeeded, because
+        callers pass a freshly fetched object through this and a dead cache
+        must not turn a good fetch into None. That makes the return value
+        useless as a success signal, which is why a caller that needs the store
+        to have happened passes required=True and gets an exception instead.
+        """
         effective_ttl = ttl if ttl is not None else self.cutoff
         with self._lock:
             self._require_open()
-            self._conn.execute(
-                "INSERT OR REPLACE INTO cache (key, value, stored_at, ttl) VALUES (?, ?, ?, ?)",
-                (key, json.dumps(obj), time.time(), effective_ttl),
-            )
-            self._conn.commit()
+            if self._degraded:
+                self._unusable(required, "written")
+                return obj
+            try:
+                self._conn.execute(
+                    "INSERT OR REPLACE INTO cache (key, value, stored_at, ttl) VALUES (?, ?, ?, ?)",
+                    (key, json.dumps(obj), time.time(), effective_ttl),
+                )
+                self._conn.commit()
+            except sqlite3.DatabaseError as exc:
+                self._degrade("writing", exc)
+                self._unusable(required, "written")
         return obj
 
     def touch(self, key: str) -> bool:
-        """Reset the timestamp of a cache entry to now."""
+        """Reset the timestamp of a cache entry to now.
+
+        False means the entry was not there, or the cache is unusable. No
+        caller distinguishes the two: a failed touch just lets the entry
+        expire on its own schedule.
+        """
         with self._lock:
             self._require_open()
-            cursor = self._conn.execute(
-                "UPDATE cache SET stored_at = ? WHERE key = ?",
-                (time.time(), key),
-            )
-            self._conn.commit()
+            if self._degraded:
+                return False
+            try:
+                cursor = self._conn.execute(
+                    "UPDATE cache SET stored_at = ? WHERE key = ?",
+                    (time.time(), key),
+                )
+                self._conn.commit()
+            except sqlite3.DatabaseError as exc:
+                self._degrade("updating", exc)
+                return False
         return cursor.rowcount > 0
 
     def delete(self, key: str) -> bool:
-        """Remove a cache entry."""
+        """Remove a cache entry. False means it was absent, or the cache is unusable."""
         with self._lock:
             self._require_open()
-            cursor = self._conn.execute("DELETE FROM cache WHERE key = ?", (key,))
-            self._conn.commit()
+            if self._degraded:
+                return False
+            try:
+                cursor = self._conn.execute("DELETE FROM cache WHERE key = ?", (key,))
+                self._conn.commit()
+            except sqlite3.DatabaseError as exc:
+                self._degrade("deleting", exc)
+                return False
         return cursor.rowcount > 0
 
     def _clean(self):
-        """Evict expired entries. Returns count of evicted rows."""
+        """Evict expired entries. Returns the number of rows removed.
+
+        Zero means nothing had expired, or the cache is unusable and nothing
+        could be removed.
+        """
         with self._lock:
             self._require_open()
-            cursor = self._conn.execute(
-                "DELETE FROM cache WHERE (? - stored_at) > ttl",
-                (time.time(),),
-            )
-            self._conn.commit()
+            if self._degraded:
+                return 0
+            try:
+                cursor = self._conn.execute(
+                    "DELETE FROM cache WHERE (? - stored_at) > ttl",
+                    (time.time(),),
+                )
+                self._conn.commit()
+            except sqlite3.DatabaseError as exc:
+                self._degrade("evicting", exc)
+                return 0
         return cursor.rowcount
 
     def save(self):
@@ -156,7 +317,12 @@ class Cache:
             if self._closed:
                 return
             self._closed = True
-            self._conn.close()
+            try:
+                self._conn.close()
+            except sqlite3.DatabaseError as exc:
+                # The connection is unusable either way, and _closed is already
+                # set, so the cache is released. Reporting is all that is left.
+                self._degrade("closing", exc)
 
     def __enter__(self) -> Self:
         return self

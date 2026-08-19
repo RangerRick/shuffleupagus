@@ -9,6 +9,7 @@ import pytest
 import requests
 from ytmusicapi.exceptions import YTMusicServerError, YTMusicUserError
 
+from shuffleupagus.core.apiresponse import ApiResponseError
 from shuffleupagus.core.cache import Cache
 from shuffleupagus.core.model import Album, Artist
 from shuffleupagus.services.youtube.model import YoutubeArtist
@@ -1367,3 +1368,109 @@ def test_prompt_for_oauth_delegates_to_refreshing_token(svc, tmp_path):
     with patch("shuffleupagus.services.youtube.service.RefreshingToken.prompt_for_token") as mock_prompt:
         svc._prompt_for_oauth(creds, auth_file)
     mock_prompt.assert_called_once_with(creds, open_browser=True, to_file=str(auth_file))
+
+
+# ---------------------------------------------------------------------------
+# Malformed responses (#59)
+# ---------------------------------------------------------------------------
+
+
+def test_get_album_tracks_rejects_a_non_list_tracks(svc):
+    svc.client.get_album.return_value = {"tracks": {"not": "a list"}}
+    album = MagicMock(id="alb1", name="Album")
+    with pytest.raises(ApiResponseError, match="tracks is not a list"):
+        svc.get_album_tracks(album)
+
+
+def test_get_album_tracks_rejects_a_non_object_entry(svc):
+    svc.client.get_album.return_value = {"tracks": ["oops"]}
+    album = MagicMock(id="alb1", name="Album")
+    with pytest.raises(ApiResponseError, match="not an object"):
+        svc.get_album_tracks(album)
+
+
+def test_get_album_tracks_rejects_a_missing_video_id(svc):
+    svc.client.get_album.return_value = {"tracks": [{"title": "T", "duration_seconds": 10}]}
+    album = MagicMock(id="alb1", name="Album")
+    with pytest.raises(ApiResponseError, match="videoId is missing"):
+        svc.get_album_tracks(album)
+
+
+def test_get_album_tracks_rejects_a_non_numeric_duration(svc):
+    svc.client.get_album.return_value = {"tracks": [{"videoId": "v1", "title": "T", "duration_seconds": {"s": 10}}]}
+    album = MagicMock(id="alb1", name="Album")
+    with pytest.raises(ApiResponseError, match="not a number"):
+        svc.get_album_tracks(album)
+
+
+def test_get_album_tracks_rejects_a_missing_tracks(svc):
+    """get_album always carries "tracks"; an absent one is malformed.
+
+    Answering [] cached an empty album, hiding every song on it until the
+    entry expired.
+    """
+    svc.client.get_album.return_value = {"other": []}
+    album = MagicMock(id="alb1", name="Album")
+    with pytest.raises(ApiResponseError, match="tracks is missing"):
+        svc.get_album_tracks(album)
+
+
+def test_get_playlist_id_for_name_rejects_a_non_object_entry(svc):
+    svc._data_api_get = MagicMock(return_value={"items": ["oops"]})
+    with pytest.raises(ApiResponseError, match="not an object"):
+        svc.get_playlist_id_for_name("My Playlist")
+
+
+def test_get_playlist_id_for_name_rejects_a_missing_title(svc):
+    svc._data_api_get = MagicMock(return_value={"items": [{"id": "p1", "snippet": {}}]})
+    with pytest.raises(ApiResponseError, match=r"snippet\.title is missing"):
+        svc.get_playlist_id_for_name("My Playlist")
+
+
+def test_malformed_response_names_the_service(svc):
+    svc.client.get_album.return_value = {"tracks": ["oops"]}
+    album = MagicMock(id="alb1", name="Album")
+    with pytest.raises(ApiResponseError, match="YouTube"):
+        svc.get_album_tracks(album)
+
+
+@pytest.mark.parametrize("cached", [42, "a string", {"not": "a list"}])
+def test_get_artist_albums_rejects_a_non_list_cache_hit(svc, cached):
+    """A cache hit is the same untrusted JSON as the response it came from."""
+    artist = YoutubeArtist("c1", "Artist")
+    svc.cache.write("artist:" + artist.id + ":albums", cached)
+    with pytest.raises(ApiResponseError, match="not a list"):
+        svc.get_artist_albums(artist)
+
+
+# ---------------------------------------------------------------------------
+# Malformed playlist pages must not drive playlist mutations (#59 follow-up)
+# ---------------------------------------------------------------------------
+
+
+def test_playlist_items_rejects_a_missing_items(svc):
+    """A page read as empty ended pagination and under-reported the playlist.
+
+    __verify_playlist then treated the partial list as the whole playlist and
+    re-added every track below the cut, duplicating them.
+    """
+    svc._data_api_get = MagicMock(return_value={"pageInfo": {"totalResults": 50}})
+    with pytest.raises(ApiResponseError, match="items is missing"):
+        svc._YoutubeService__get_playlist_items("pl1", "contentDetails")
+
+
+def test_playlist_items_rejects_a_non_object_response(svc):
+    """api_has answers False for a list, and .get would then raise AttributeError."""
+    svc._data_api_get = MagicMock(return_value=["not", "an", "object"])
+    with pytest.raises(ApiResponseError, match="not an object"):
+        svc._YoutubeService__get_playlist_items("pl1", "contentDetails")
+
+
+def test_verify_playlist_rejects_an_entry_without_a_video_id(svc):
+    """part=contentDetails was requested, so an entry lacking it is malformed.
+
+    Dropping it made the video count as missing and get re-added.
+    """
+    svc._data_api_get = MagicMock(return_value={"items": [{"contentDetails": {}}]})
+    with pytest.raises(ApiResponseError, match="videoId is missing"):
+        svc._YoutubeService__verify_playlist("pl1", ["v1"])

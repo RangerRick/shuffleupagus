@@ -11,6 +11,7 @@ from ytmusicapi import YTMusic
 from ytmusicapi.auth.oauth import OAuthCredentials, RefreshingToken
 from ytmusicapi.exceptions import YTMusicServerError, YTMusicUserError
 
+from ...core.apiresponse import api_array, api_has, api_int, api_list, api_object, api_str
 from ...core.config import get_filepath
 from ...core.model import Album, Artist, Service, Track
 from ...core.util import logger
@@ -18,6 +19,9 @@ from .model import YoutubeAlbum, YoutubeArtist, YoutubeTrack
 
 # Fingerprint TTL: how often to re-check whether a new album has appeared.
 _FINGERPRINT_TTL = 60 * 60 * 24  # 24 hours
+
+# Named in every message raised from an unexpected API response.
+_SERVICE_LABEL = "YouTube"
 
 channelUrl = re.compile(
     r'^.*<link rel="canonical" href="https://www\.youtube\.com/channel/([^\"]+)".*$',
@@ -432,7 +436,7 @@ class YoutubeService(Service):
             # Derive the current "latest album" fingerprint from the get_artist response,
             # which is already in memory — no extra API call required.
             inline = artist.inlineAlbums
-            current_fp = inline[0]["browseId"] if inline else None
+            current_fp = api_object(inline[0], "inline albums[0]", _SERVICE_LABEL).get("browseId") if inline else None
 
             stale = self.cache.read_stale(cache_key)
             if stale is not None and current_fp is not None:
@@ -461,10 +465,13 @@ class YoutubeService(Service):
             self.cache.write(cache_key, ret)
             inline = artist.inlineAlbums
             if inline:
-                self.cache.write(fp_key, inline[0]["browseId"], ttl=_FINGERPRINT_TTL)
+                first = api_object(inline[0], "inline albums[0]", _SERVICE_LABEL)
+                self.cache.write(fp_key, api_str(first, ("browseId",), _SERVICE_LABEL), ttl=_FINGERPRINT_TTL)
 
-        if ret and len(ret) > 0:
-            for album in ret:
+        if ret:
+            # Checked after the branches merge: ret is either a cache hit, a
+            # get_artist_albums response, or the inline albums off the artist.
+            for album in api_array(ret, "artist albums", _SERVICE_LABEL):
                 albums.append(YoutubeAlbum.from_dict(album))
 
         return albums
@@ -490,17 +497,23 @@ class YoutubeService(Service):
             self.cache.write(cache_key, ret)
 
         tracks: list[Track] = []
-        if ret and "tracks" in ret:
-            for track in ret["tracks"]:
+        # get_album always carries "tracks"; an absent one is a malformed
+        # response, not an album with no songs, and caching it as empty would
+        # hide the album for the life of the entry.
+        if ret is not None:
+            for track in api_list(ret, ("tracks",), _SERVICE_LABEL):
+                track = api_object(track, "tracks[] entry", _SERVICE_LABEL)
                 youtubeTrack = YoutubeTrack(
-                    id=track["videoId"],
-                    name=track["title"],
-                    duration_ms=track["duration_seconds"] * 1000,
+                    id=api_str(track, ("videoId",), _SERVICE_LABEL),
+                    name=api_str(track, ("title",), _SERVICE_LABEL),
+                    duration_ms=api_int(track, ("duration_seconds",), _SERVICE_LABEL) * 1000,
                     album=album,
                 )
-                for artist in track.get("artists", []):
-                    if artist.get("id") is not None:
-                        resolved_artist = self.get_artist(artist["id"])
+                raw_artists = api_list(track, ("artists",), _SERVICE_LABEL) if api_has(track, "artists") else []
+                for artist in raw_artists:
+                    entry = api_object(artist, "tracks[].artists[] entry", _SERVICE_LABEL)
+                    if entry.get("id") is not None:
+                        resolved_artist = self.get_artist(api_str(entry, ("id",), _SERVICE_LABEL))
                         if resolved_artist is not None:
                             youtubeTrack.artists.append(resolved_artist)
                 tracks.append(youtubeTrack)
@@ -537,9 +550,11 @@ class YoutubeService(Service):
             if page_token:
                 params["pageToken"] = page_token
             data = self._data_api_get("https://www.googleapis.com/youtube/v3/playlists", params)
-            for item in data.get("items", []):
-                if item["snippet"]["title"] == playlist_name:
-                    return item["id"]
+            data = api_object(data, "playlists response", _SERVICE_LABEL)
+            for item in api_list(data, ("items",), _SERVICE_LABEL):
+                entry = api_object(item, "items[] entry", _SERVICE_LABEL)
+                if api_str(entry, ("snippet", "title"), _SERVICE_LABEL) == playlist_name:
+                    return api_str(entry, ("id",), _SERVICE_LABEL)
             page_token = data.get("nextPageToken")
             if not page_token:
                 break
@@ -554,7 +569,16 @@ class YoutubeService(Service):
             if page_token:
                 params["pageToken"] = page_token
             data = self._data_api_get("https://www.googleapis.com/youtube/v3/playlistItems", params)
-            items.extend(data.get("items", []))
+            # Checked before either read: api_has answers False for a list, and
+            # the .get below would then raise AttributeError — the raw failure
+            # these helpers replace, one line after the guard.
+            data = api_object(data, "playlistItems response", _SERVICE_LABEL)
+            # "items" is mandatory, and load-bearing: __verify_playlist treats
+            # what this returns as the complete playlist. A page read as empty
+            # ends the loop early, and every entry past that point then looks
+            # missing and gets re-added as a duplicate in the user's playlist.
+            page = api_list(data, ("items",), _SERVICE_LABEL)
+            items.extend(api_object(item, "items[] entry", _SERVICE_LABEL) for item in page)
             page_token = data.get("nextPageToken")
             if not page_token:
                 break
@@ -576,10 +600,12 @@ class YoutubeService(Service):
         """Confirm every video reached the playlist, re-adding any that did not."""
         expected = set(expected_ids)
         for round_num in range(self._MAX_VERIFY_ROUNDS + 1):
+            # No api_has filter: part=contentDetails was requested, so an entry
+            # without contentDetails.videoId is malformed. Dropping it made the
+            # video count as missing and get re-added, duplicating it.
             actual = {
-                item["contentDetails"]["videoId"]
+                api_str(item, ("contentDetails", "videoId"), _SERVICE_LABEL)
                 for item in self.__get_playlist_items(playlist_id, "contentDetails")
-                if item.get("contentDetails", {}).get("videoId")
             }
             missing = expected - actual
             if not missing:
@@ -600,7 +626,9 @@ class YoutubeService(Service):
     def sync(self, playlist_name: str, tracks: list[str] | None = None):
         playlist_id = self.get_playlist_id_for_name(playlist_name)
 
-        existing_item_ids = [item["id"] for item in self.__get_playlist_items(playlist_id, "id")]
+        existing_item_ids = [
+            api_str(item, ("id",), _SERVICE_LABEL) for item in self.__get_playlist_items(playlist_id, "id")
+        ]
         logger.debug(f"{self.tag}  * removing {len(existing_item_ids)} existing items from playlist")
         for item_id in existing_item_ids:
             self._data_api_delete(

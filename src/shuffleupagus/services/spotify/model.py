@@ -1,6 +1,10 @@
 from collections.abc import Sequence
 
 from ...core import model
+from ...core.apiresponse import api_field, api_int, api_list, api_object, api_str
+
+# Named in every message raised from an unexpected API response.
+_SERVICE_LABEL = "Spotify"
 
 
 def sanitize_id(id: str) -> str:
@@ -25,7 +29,10 @@ class SpotifyArtist(model.Artist):
 
     @staticmethod
     def from_dict(obj):
-        return SpotifyArtist(obj["id"], obj["name"])
+        return SpotifyArtist(
+            api_str(obj, ("id",), _SERVICE_LABEL),
+            api_str(obj, ("name",), _SERVICE_LABEL),
+        )
 
 
 class SpotifyAlbum(model.Album):
@@ -41,7 +48,11 @@ class SpotifyAlbum(model.Album):
 
     @staticmethod
     def from_dict(obj):
-        return SpotifyAlbum(obj["id"], obj["name"], obj["release_date"])
+        return SpotifyAlbum(
+            api_str(obj, ("id",), _SERVICE_LABEL),
+            api_str(obj, ("name",), _SERVICE_LABEL),
+            api_str(obj, ("release_date",), _SERVICE_LABEL),
+        )
 
 
 class SpotifyTrack(model.Track):
@@ -67,11 +78,23 @@ class SpotifyTrack(model.Track):
 
     @staticmethod
     def from_dict(obj):
+        # Checked before anything reads an optional key: `"artists" in obj`
+        # raises TypeError rather than answering False when obj is not a
+        # container, which is the raw failure this whole helper layer replaces.
+        obj = api_object(obj, "track", _SERVICE_LABEL)
+        # "isrc" and "artists" stay optional: Spotify omits both on some track
+        # shapes, and an absent field is not a malformed response. A present
+        # "artists" that is not a list of objects is, so it is still checked.
+        raw_artists = api_list(obj, ("artists",), _SERVICE_LABEL) if "artists" in obj else []
         return SpotifyTrack(
-            id=obj["id"],
-            name=obj["name"],
-            duration_ms=obj["duration_ms"],
+            id=api_str(obj, ("id",), _SERVICE_LABEL),
+            name=api_str(obj, ("name",), _SERVICE_LABEL),
+            duration_ms=api_int(obj, ("duration_ms",), _SERVICE_LABEL),
             isrc=obj.get("isrc"),
-            album=SpotifyAlbum.from_dict(obj["album"]),
-            artists=[SpotifyArtist.from_dict(artist) for artist in obj.get("artists", [])],
+            album=SpotifyAlbum.from_dict(
+                api_object(api_field(obj, ("album",), _SERVICE_LABEL), "album", _SERVICE_LABEL)
+            ),
+            artists=[
+                SpotifyArtist.from_dict(api_object(artist, "artists[] entry", _SERVICE_LABEL)) for artist in raw_artists
+            ],
         )

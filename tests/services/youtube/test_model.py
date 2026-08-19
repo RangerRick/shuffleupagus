@@ -1,5 +1,6 @@
 import pytest
 
+from shuffleupagus.core.apiresponse import ApiResponseError
 from shuffleupagus.services.youtube.model import (
     YoutubeAlbum,
     YoutubeArtist,
@@ -192,3 +193,134 @@ def test_track_matches_url():
     t = YoutubeTrack("vid1", "Song", 60_000)
     assert t.matches("vid1")
     assert not t.matches("other")
+
+
+# --- response shape checks (#59) ---
+
+
+def _artist_payload() -> dict:
+    return {"channelId": "c1", "name": "Artist"}
+
+
+def _album_payload() -> dict:
+    return {"browseId": "b1", "title": "Album", "year": "2020"}
+
+
+@pytest.mark.parametrize("container", [[], "string", 42, None])
+def test_artist_from_dict_wrong_container(container):
+    with pytest.raises(ApiResponseError, match="not an object"):
+        YoutubeArtist.from_dict(container)
+
+
+@pytest.mark.parametrize("missing", ["channelId", "name"])
+def test_artist_from_dict_missing_key(missing):
+    obj = _artist_payload()
+    del obj[missing]
+    with pytest.raises(ApiResponseError, match=missing):
+        YoutubeArtist.from_dict(obj)
+
+
+@pytest.mark.parametrize("field", ["channelId", "name"])
+def test_artist_from_dict_wrong_type(field):
+    obj = _artist_payload()
+    obj[field] = 42
+    with pytest.raises(ApiResponseError, match="not a string"):
+        YoutubeArtist.from_dict(obj)
+
+
+@pytest.mark.parametrize("section", ["albums", "singles", "songs"])
+def test_artist_from_dict_section_wrong_container(section):
+    obj = _artist_payload()
+    obj[section] = ["not", "an", "object"]
+    with pytest.raises(ApiResponseError, match=f"{section} is not an object"):
+        YoutubeArtist.from_dict(obj)
+
+
+def test_artist_from_dict_section_results_wrong_container():
+    obj = _artist_payload()
+    obj["albums"] = {"browseId": "b", "results": {"not": "a list"}}
+    with pytest.raises(ApiResponseError, match="not a list"):
+        YoutubeArtist.from_dict(obj)
+
+
+def test_artist_from_dict_absent_sections_are_allowed():
+    assert YoutubeArtist.from_dict(_artist_payload()).inlineAlbums == []
+
+
+@pytest.mark.parametrize("container", [[], "string", 42, None])
+def test_album_from_dict_wrong_container(container):
+    with pytest.raises(ApiResponseError, match="not an object"):
+        YoutubeAlbum.from_dict(container)
+
+
+def test_album_from_dict_missing_title():
+    obj = _album_payload()
+    del obj["title"]
+    with pytest.raises(ApiResponseError, match="title"):
+        YoutubeAlbum.from_dict(obj)
+
+
+def test_album_from_dict_no_usable_id():
+    with pytest.raises(ApiResponseError, match="no usable ID"):
+        YoutubeAlbum.from_dict({"title": "Album"})
+
+
+def test_album_from_dict_non_string_id():
+    with pytest.raises(ApiResponseError, match="no usable ID"):
+        YoutubeAlbum.from_dict({"browseId": 42, "title": "Album"})
+
+
+@pytest.mark.parametrize("container", [[], "string", 42, None])
+def test_track_from_dict_wrong_container(container):
+    with pytest.raises(ApiResponseError, match="not an object"):
+        YoutubeTrack.from_dict(container)
+
+
+def test_track_from_dict_unrecognised_shape():
+    with pytest.raises(ApiResponseError, match="neither a videoId nor a videoDetails"):
+        YoutubeTrack.from_dict({"something": "else"})
+
+
+def test_track_from_dict_missing_title():
+    with pytest.raises(ApiResponseError, match="title"):
+        YoutubeTrack.from_dict({"videoId": "v1", "duration_seconds": 10})
+
+
+def test_track_from_dict_wrong_video_id_type():
+    with pytest.raises(ApiResponseError, match="not a string"):
+        YoutubeTrack.from_dict({"videoId": 42, "title": "T", "duration_seconds": 10})
+
+
+def test_track_from_dict_wrong_duration_type():
+    with pytest.raises(ApiResponseError, match="not a number"):
+        YoutubeTrack.from_dict({"videoId": "v1", "title": "T", "duration_seconds": {"s": 10}})
+
+
+def test_track_from_dict_video_details_wrong_container():
+    with pytest.raises(ApiResponseError, match="not an object"):
+        YoutubeTrack.from_dict({"videoDetails": ["not", "an", "object"]})
+
+
+def test_track_from_dict_reports_the_service():
+    with pytest.raises(ApiResponseError, match="YouTube"):
+        YoutubeTrack.from_dict({})
+
+
+@pytest.mark.parametrize("bad_year", [True, False, 2020, ["2020"], {"y": "2020"}])
+def test_album_from_dict_tolerates_a_non_string_year(bad_year):
+    """A truthy non-string used to reach .isdigit() and raise AttributeError."""
+    album = YoutubeAlbum.from_dict({"browseId": "b1", "title": "Album", "year": bad_year})
+    assert album.release_date is None
+
+
+@pytest.mark.parametrize("bad_type", [True, 2020, ["2020"]])
+def test_album_from_dict_tolerates_a_non_string_type(bad_type):
+    """'type' is the fallback year field and takes the same path."""
+    album = YoutubeAlbum.from_dict({"browseId": "b1", "title": "Album", "type": bad_type})
+    assert album.release_date is None
+
+
+def test_album_from_dict_still_reads_a_year_from_type():
+    album = YoutubeAlbum.from_dict({"browseId": "b1", "title": "Album", "year": "Single", "type": "2021"})
+    assert album.release_date is not None
+    assert album.release_date.year == 2021

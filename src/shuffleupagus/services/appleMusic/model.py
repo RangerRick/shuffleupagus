@@ -1,6 +1,10 @@
 from collections.abc import Sequence
 
+from ...core.apiresponse import api_int, api_str
 from ...core.model import Album, Artist, Track
+
+# Named in every message raised from an unexpected API response.
+_SERVICE_LABEL = "Apple Music"
 
 
 def sanitize_id(id: str) -> str:
@@ -22,8 +26,8 @@ class AppleMusicArtist(Artist):
     @staticmethod
     def from_dict(obj):
         return AppleMusicArtist(
-            id=obj["id"],
-            name=obj["attributes"]["name"],
+            id=api_str(obj, ("id",), _SERVICE_LABEL),
+            name=api_str(obj, ("attributes", "name"), _SERVICE_LABEL),
         )
 
 
@@ -38,9 +42,9 @@ class AppleMusicAlbum(Album):
     @staticmethod
     def from_dict(obj):
         return AppleMusicAlbum(
-            id=obj["id"],
-            name=obj["attributes"]["name"],
-            release_date=obj["attributes"]["releaseDate"],
+            id=api_str(obj, ("id",), _SERVICE_LABEL),
+            name=api_str(obj, ("attributes", "name"), _SERVICE_LABEL),
+            release_date=api_str(obj, ("attributes", "releaseDate"), _SERVICE_LABEL),
         )
 
 
@@ -63,10 +67,10 @@ class AppleMusicTrack(Track):
     @staticmethod
     def from_dict(obj, album: Album | None = None, artists: Sequence[Artist] | None = None):
         return AppleMusicTrack(
-            id=obj["id"],
-            name=obj["attributes"]["name"],
-            duration_ms=obj["attributes"]["durationInMillis"],
-            isrc=obj["attributes"]["isrc"],
+            id=api_str(obj, ("id",), _SERVICE_LABEL),
+            name=api_str(obj, ("attributes", "name"), _SERVICE_LABEL),
+            duration_ms=api_int(obj, ("attributes", "durationInMillis"), _SERVICE_LABEL),
+            isrc=api_str(obj, ("attributes", "isrc"), _SERVICE_LABEL),
             album=album,
             artists=artists,
         )
