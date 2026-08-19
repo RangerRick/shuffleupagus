@@ -31,6 +31,11 @@ dev = [
   "pytest-cov>=7.1.0",
   "ruff>=0.16.3",
   "ty>=0.0.72",
+  # Exact pin, not a range: pyright ships new checks in patch releases, so an
+  # unpinned gate fails the build on someone else's schedule. Renovate bumps it
+  # in a commit instead. The [nodejs] extra brings Node in as a wheel, so
+  # `uv sync` is still the only setup step and contributors need no Node install.
+  "pyright[nodejs]==1.1.411",
 ]
 
 [tool.ruff]
@@ -99,10 +104,18 @@ ignore = [
 [tool.ruff.format]
 quote-style = "double"
 
+# Both pyright and ty run. They are not redundant: ty is fast and native to the
+# ruff/uv toolchain, and pyright catches diagnostics ty does not — it found all
+# 13 in #40. The cost of keeping both is two suppression vocabularies, which
+# today means exactly two lines carrying a ty: ignore and a pyright: ignore for
+# the same deliberate type error. That is cheap and visible; revisit if it grows.
 [tool.pyright]
+include = ["src", "tests", "scripts"]
 extraPaths = ["src"]
 venvPath = "."
 venv = ".venv"
+# Matches .python-version, which is the single interpreter pin. A looser value
+# here would let pyright check against a version the project cannot run on.
 pythonVersion = "3.14"
 
 [tool.ty.environment]

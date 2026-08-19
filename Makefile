@@ -6,6 +6,7 @@ dev:
 lint:
 	uv run ruff check src/ tests/ scripts/
 	uv run ty check src/ tests/ scripts/
+	uv run pyright
 
 format:
 	uv run ruff format src/ tests/ scripts/

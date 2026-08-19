@@ -38,6 +38,8 @@ jobs:
       - run: uv run ruff check src/ tests/ scripts/
       - run: uv run ruff format --check src/ tests/ scripts/
       - run: uv run ty check src/ tests/ scripts/
+      # Scope comes from [tool.pyright] include, so it stays in step with make lint.
+      - run: uv run pyright
 
   test:
     name: tests and coverage
