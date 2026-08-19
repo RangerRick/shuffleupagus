@@ -751,6 +751,16 @@ def test_load_oauth_token_unreadable_raises_with_path_and_remedy(svc, tmp_path):
     assert "delete" in message
 
 
+def test_load_oauth_token_undecodable_raises_rather_than_crashing(svc, tmp_path):
+    """A non-UTF-8 token file is unreadable too. UnicodeDecodeError is a ValueError,
+    not an OSError, so it would otherwise escape past every handler here."""
+    token_file = tmp_path / "token.json"
+    token_file.write_bytes(b"\xff\xfe not utf-8")
+    with pytest.raises(RuntimeError) as caught:
+        svc._load_oauth_token(token_file)
+    assert str(token_file) in str(caught.value)
+
+
 def test_login_does_not_reauth_when_the_token_file_is_unreadable(svc, tmp_path):
     """The bug: a valid token got overwritten by a re-auth triggered by an I/O error."""
     auth_file = tmp_path / "auth.json"

@@ -202,6 +202,13 @@ class YoutubeService(Service):
             pass
         except json.JSONDecodeError as exc:
             logger.warning(f"{self.tag}* ignoring corrupt OAuth token file {auth_file}: {exc}")
+        except UnicodeDecodeError as exc:
+            # Also unreadable, and also not recoverable by re-authenticating.
+            # UnicodeDecodeError is a ValueError, so it would otherwise slip past
+            # both the JSONDecodeError and the OSError branch.
+            raise RuntimeError(
+                f"OAuth token file {auth_file} is not valid UTF-8: {exc}. Delete it to force a fresh login."
+            ) from exc
         except OSError as exc:
             # Returning None here would be indistinguishable from "no token
             # file", and the caller answers that by running the whole device-code

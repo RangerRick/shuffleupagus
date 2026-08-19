@@ -72,6 +72,22 @@ def test_int_error_message_is_bounded():
     assert len(str(caught.value)) < 200
 
 
+@pytest.mark.parametrize("body", ['{"total": Infinity}', '{"total": -Infinity}', '{"total": 1e400}'])
+def test_int_rejects_infinities_that_json_accepts(body):
+    """json.loads accepts Infinity by default, and int() raises OverflowError on it."""
+    import json
+
+    with pytest.raises(ApiResponseError, match="not a number"):
+        api_int(json.loads(body), ("total",), SERVICE)
+
+
+def test_int_rejects_nan():
+    import json
+
+    with pytest.raises(ApiResponseError, match="not a number"):
+        api_int(json.loads('{"total": NaN}'), ("total",), SERVICE)
+
+
 def test_int_missing_field_still_names_the_path():
     with pytest.raises(ApiResponseError, match="missing"):
         api_int({}, ("meta", "total"), SERVICE)

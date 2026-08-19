@@ -44,8 +44,23 @@ def api_int(payload: object, path: Sequence[str], service: str) -> int:
         raise ApiResponseError(f"{_describe(service, path)} is not a number: {type(value).__name__}")
     try:
         return int(value)
-    except ValueError as exc:
+    # json.loads accepts Infinity, -Infinity and NaN by default, and a float
+    # literal too large to represent becomes inf. int() answers those with
+    # OverflowError, which is not a ValueError.
+    except (ValueError, OverflowError) as exc:
         raise ApiResponseError(f"{_describe(service, path)} is not a number: {value!r:.60}") from exc
+
+
+def api_str(payload: object, path: Sequence[str], service: str) -> str:
+    """Return a field that must already be a string.
+
+    str() would happily turn a dict or a list into one, and the result then goes
+    into a URL as though it were an identifier.
+    """
+    value = api_field(payload, path, service)
+    if not isinstance(value, str):
+        raise ApiResponseError(f"{_describe(service, path)} is not a string: {type(value).__name__}")
+    return value
 
 
 def api_list(payload: object, path: Sequence[str], service: str) -> list:

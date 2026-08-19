@@ -5,7 +5,7 @@ from concurrent.futures import as_completed
 import applemusicpy
 import applescript
 
-from ...core.apiresponse import api_field, api_int, api_list
+from ...core.apiresponse import api_int, api_list, api_str
 from ...core.model import Album, Artist, Service, Track
 from ...core.util import logger, parse_retry_after
 from .model import AppleMusicAlbum, AppleMusicArtist, AppleMusicTrack, sanitize_id
@@ -50,7 +50,7 @@ def _run_applescript(script: applescript.AppleScript, doing: str, playlist_name:
     try:
         return script.run()
     except applescript.ScriptError as exc:
-        detail = f"AppleScript failed {doing} playlist '{playlist_name}': {exc}"
+        detail = f"AppleScript failed {doing} playlist '{playlist_name}': {exc!s:.200}"
         if exc.number == _ERR_NOT_PERMITTED:
             detail += (
                 ". Allow this program to control Music under System Settings > "
@@ -348,7 +348,7 @@ class AppleMusicService(Service):
                 for playlist in api_list(r.json(), ("data",), _SERVICE_LABEL):
                     attrs = playlist.get("attributes", {}) if isinstance(playlist, dict) else {}
                     if attrs.get("name") == playlist_name:
-                        return str(api_field(playlist, ("id",), _SERVICE_LABEL))
+                        return api_str(playlist, ("id",), _SERVICE_LABEL)
             else:
                 logger.error(f"{self.tag}  ! error fetching playlists: {r.status_code} {r.reason}")
                 if len(r.text.strip()) > 0:
