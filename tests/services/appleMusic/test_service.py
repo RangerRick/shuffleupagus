@@ -1019,12 +1019,6 @@ def test_get_artist_albums_rejects_a_non_list_data(svc):
         svc.get_artist_albums(artist)
 
 
-def test_get_artist_albums_missing_data_is_empty(svc):
-    svc.client.artist_relationship.return_value = {"meta": {}}
-    artist = MagicMock(id="a1", name="Artist")
-    assert svc.get_artist_albums(artist) == []
-
-
 def test_get_artist_albums_rejects_a_non_object_response(svc):
     svc.client.artist_relationship.return_value = ["not", "an", "object"]
     artist = MagicMock(id="a1", name="Artist")
@@ -1043,3 +1037,42 @@ def test_malformed_response_names_the_service(svc):
     svc.client.artist.return_value = {"data": {"not": "a list"}}
     with pytest.raises(ApiResponseError, match="Apple Music"):
         svc.get_artist("a1")
+
+
+def test_get_artist_albums_rejects_a_missing_data(svc):
+    """An empty relationship answers {"data": []}, so an absent data is malformed.
+
+    get_artist has always raised on this; the three now agree.
+    """
+    svc.client.artist_relationship.return_value = {"meta": {}}
+    artist = MagicMock(id="a1", name="Artist")
+    with pytest.raises(ApiResponseError, match="data is missing"):
+        svc.get_artist_albums(artist)
+
+
+def test_get_album_tracks_rejects_a_missing_data(svc):
+    svc.client.album_relationship.return_value = {"meta": {}}
+    album = MagicMock(id="alb1", name="Album")
+    with pytest.raises(ApiResponseError, match="data is missing"):
+        svc.get_album_tracks(album)
+
+
+def test_get_artist_top_tracks_rejects_a_missing_data(svc):
+    svc.client.artist_relationship_view.return_value = {"meta": {}}
+    artist = MagicMock(id="a1", name="Artist")
+    with pytest.raises(ApiResponseError, match="data is missing"):
+        svc.get_artist_top_tracks(artist)
+
+
+def test_get_artist_albums_empty_data_is_not_an_error(svc):
+    """A relationship with nothing in it is a legitimate empty answer."""
+    svc.client.artist_relationship.return_value = {"data": []}
+    artist = MagicMock(id="a1", name="Artist")
+    assert svc.get_artist_albums(artist) == []
+
+
+def test_get_artist_albums_failed_fetch_is_still_empty(svc):
+    """A logged fetch failure leaves ret None and still answers empty."""
+    svc.client.artist_relationship.return_value = None
+    artist = MagicMock(id="a1", name="Artist")
+    assert svc.get_artist_albums(artist) == []

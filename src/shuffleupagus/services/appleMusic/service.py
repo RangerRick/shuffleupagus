@@ -196,14 +196,14 @@ class AppleMusicService(Service):
                 self._reraise_if_fatal(e, "artist albums")
                 logger.warning(f"{self.tag}  ! error fetching albums for {artist.name} ({artist.id}): {e}")
 
-        # A response with no "data" at all means the artist has no albums, which
-        # is why this answers [] rather than raising. A "data" that is present
-        # but is not a list of objects is a different thing, and does raise.
+        # ret is None only when the fetch above failed and was logged. An
+        # empty relationship answers {"data": []}, so "data" itself is always
+        # present on a response that arrived, and an absent one is malformed.
+        # get_artist has always treated it that way; these three agreeing is
+        # what the shape checks are for.
         if ret is None:
             return []
         ret = api_object(ret, "response", _SERVICE_LABEL)
-        if "data" not in ret:
-            return []
 
         albums = []
         for album in api_list(ret, ("data",), _SERVICE_LABEL):
@@ -274,8 +274,6 @@ class AppleMusicService(Service):
         if ret is None:
             return []
         ret = api_object(ret, "response", _SERVICE_LABEL)
-        if "data" not in ret:
-            return []
 
         artists = []
         if artist is not None:
@@ -324,8 +322,6 @@ class AppleMusicService(Service):
         if ret is None:
             return []
         ret = api_object(ret, "response", _SERVICE_LABEL)
-        if "data" not in ret:
-            return []
 
         tracks = []
         for track in api_list(ret, ("data",), _SERVICE_LABEL):
