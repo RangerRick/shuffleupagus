@@ -131,3 +131,12 @@ def test_service_context_manager_closes_on_exception(tmp_path, monkeypatch):
     with pytest.raises(ValueError, match="boom"), svc:
         raise ValueError("boom")
     assert svc.cache.closed is True
+
+
+def test_service_close_releases_cache_even_when_eviction_fails(tmp_path, monkeypatch):
+    """Service.close() has the same guarantee: a failing save() must not leak."""
+    svc = _bare_service(tmp_path, monkeypatch, name="svc_evict_fail")
+    monkeypatch.setattr(Cache, "_clean", lambda self: (_ for _ in ()).throw(RuntimeError("boom")))
+    with pytest.raises(RuntimeError, match="boom"):
+        svc.close()
+    assert svc.cache.closed is True, "connection leaked when eviction raised"

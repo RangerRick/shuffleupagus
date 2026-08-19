@@ -281,3 +281,13 @@ def test_context_manager_exit_tolerates_an_already_closed_cache(tmp_path, monkey
     with Cache("early") as c:
         c.close()
     assert c.closed is True
+
+
+def test_exit_closes_even_when_eviction_fails(tmp_path, monkeypatch):
+    """__exit__ exists to guarantee release. A failing save() must not leak."""
+    monkeypatch.setattr(Cache, "_db_path", lambda self: str(tmp_path / f"{self.name}.db"))
+    c = Cache("evict_fail")
+    monkeypatch.setattr(Cache, "_clean", lambda self: (_ for _ in ()).throw(RuntimeError("boom")))
+    with pytest.raises(RuntimeError, match="boom"):
+        c.__exit__(None, None, None)
+    assert c.closed is True, "connection leaked when eviction raised"

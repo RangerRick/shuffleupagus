@@ -190,8 +190,12 @@ class Service:
             return
         self._closed = True
         self._shutdown_pools(wait=True)
-        self.cache.save()
-        self.cache.close()
+        # Same guarantee as Cache.__exit__: eviction failing must not leave the
+        # connection open, and _closed is already set so nothing retries this.
+        try:
+            self.cache.save()
+        finally:
+            self.cache.close()
 
     def __enter__(self) -> Self:
         return self

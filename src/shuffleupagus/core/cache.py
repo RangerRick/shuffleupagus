@@ -165,6 +165,13 @@ class Cache:
         # save() then close(), matching Service.close(). Without the save() the
         # two teardown paths would leave different amounts of expired data on
         # disk for the same cache.
-        if not self._closed:
-            self.save()
-        self.close()
+        #
+        # close() is in a finally because releasing the connection is the whole
+        # promise of __exit__: eviction failing must not turn a with block into
+        # a leak. It also covers another thread closing between the check and
+        # the save(), since close() is idempotent.
+        try:
+            if not self._closed:
+                self.save()
+        finally:
+            self.close()
