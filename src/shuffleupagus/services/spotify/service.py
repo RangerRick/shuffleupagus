@@ -233,8 +233,13 @@ class SpotifyService(Service):
             for track in api_array(ret, "album tracks", _SERVICE_LABEL):
                 track = api_object(track, "items[] entry", _SERVICE_LABEL)
                 isrc = None
-                if api_has(track.get("external_ids"), "isrc"):
-                    isrc = str(api_str(track, ("external_ids", "isrc"), _SERVICE_LABEL))
+                # "external_ids" is optional, but a present one that is not an
+                # object is malformed rather than absent. api_has answers False
+                # for both, which would mask the second silently.
+                if "external_ids" in track:
+                    external_ids = api_object(track["external_ids"], "external_ids", _SERVICE_LABEL)
+                    if "isrc" in external_ids:
+                        isrc = api_str(external_ids, ("isrc",), _SERVICE_LABEL)
 
                 spotifyTrack = SpotifyTrack(
                     id=api_str(track, ("id",), _SERVICE_LABEL),
@@ -284,8 +289,11 @@ class SpotifyService(Service):
                 album = self.get_album_by_id(api_str(track, ("album", "id"), _SERVICE_LABEL))
 
                 isrc = None
-                if api_has(track.get("external_ids"), "isrc"):
-                    isrc = api_str(track, ("external_ids", "isrc"), _SERVICE_LABEL)
+                # See get_album_tracks: present-but-malformed is not absent.
+                if "external_ids" in track:
+                    external_ids = api_object(track["external_ids"], "external_ids", _SERVICE_LABEL)
+                    if "isrc" in external_ids:
+                        isrc = api_str(external_ids, ("isrc",), _SERVICE_LABEL)
 
                 artists = []
                 for a in api_list(track, ("artists",), _SERVICE_LABEL):

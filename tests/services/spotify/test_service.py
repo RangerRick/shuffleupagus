@@ -870,3 +870,50 @@ def test_get_playlist_id_for_name_rejects_a_missing_items(svc):
     svc._call = MagicMock(return_value={"total": 3})
     with pytest.raises(ApiResponseError, match="items is missing"):
         svc.get_playlist_id_for_name("My Playlist")
+
+
+@pytest.mark.parametrize("bad", ["a string", 42, ["a", "list"]])
+def test_get_album_tracks_rejects_a_non_object_external_ids(svc, bad):
+    """Present-but-malformed is not the same as absent, which is legitimate."""
+    payload = _track_payload()
+    payload["external_ids"] = bad
+    svc.spotify.album_tracks.return_value = {"items": [payload]}
+    svc.spotify.artist.return_value = _artist_payload()
+    with pytest.raises(ApiResponseError, match="external_ids is not an object"):
+        svc.get_album_tracks(Album("alb1", "A"))
+
+
+@pytest.mark.parametrize("bad", ["a string", 42, ["a", "list"]])
+def test_get_artist_top_tracks_rejects_a_non_object_external_ids(svc, bad):
+    track = _track_payload()
+    track["external_ids"] = bad
+    svc.spotify.artist_top_tracks.return_value = {"tracks": [track]}
+    svc.spotify.album.return_value = _album_payload()
+    svc.spotify.artist.return_value = _artist_payload()
+    with pytest.raises(ApiResponseError, match="external_ids is not an object"):
+        svc.get_artist_top_tracks(Artist("a1", "A"))
+
+
+def test_get_album_tracks_rejects_a_non_string_isrc(svc):
+    payload = _track_payload()
+    payload["external_ids"] = {"isrc": 42}
+    svc.spotify.album_tracks.return_value = {"items": [payload]}
+    svc.spotify.artist.return_value = _artist_payload()
+    with pytest.raises(ApiResponseError, match="not a string"):
+        svc.get_album_tracks(Album("alb1", "A"))
+
+
+def test_get_album_tracks_absent_external_ids_is_allowed(svc):
+    payload = _track_payload()
+    del payload["external_ids"]
+    svc.spotify.album_tracks.return_value = {"items": [payload]}
+    svc.spotify.artist.return_value = _artist_payload()
+    assert svc.get_album_tracks(Album("alb1", "A"))[0].isrc is None
+
+
+def test_get_album_tracks_external_ids_without_isrc_is_allowed(svc):
+    payload = _track_payload()
+    payload["external_ids"] = {"upc": "123"}
+    svc.spotify.album_tracks.return_value = {"items": [payload]}
+    svc.spotify.artist.return_value = _artist_payload()
+    assert svc.get_album_tracks(Album("alb1", "A"))[0].isrc is None
