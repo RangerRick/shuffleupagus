@@ -437,6 +437,42 @@ def test_get_playlist_id_for_name_not_found(svc):
         svc.get_playlist_id_for_name("Missing")
 
 
+def test_get_playlist_id_for_name_missing_data_key_names_the_field(svc):
+    """A response without 'data' must not surface as a bare KeyError."""
+    _mock_session_get(svc, error_json={"errors": [{"detail": "nope"}]})
+    with pytest.raises(ValueError) as caught:
+        svc.get_playlist_id_for_name("My Playlist")
+    message = str(caught.value)
+    assert "Apple Music" in message
+    assert "data" in message
+    assert "missing" in message
+
+
+@pytest.mark.parametrize("data", [{"not": "a list"}, "text", 3])
+def test_get_playlist_id_for_name_wrong_typed_data_is_reported(svc, data):
+    _mock_session_get(svc, error_json={"data": data})
+    with pytest.raises(ValueError, match="not a list"):
+        svc.get_playlist_id_for_name("My Playlist")
+
+
+def test_get_playlist_id_for_name_entry_without_id_names_the_field(svc):
+    _mock_session_get(svc, [{"attributes": {"name": "My Playlist"}}])
+    with pytest.raises(ValueError) as caught:
+        svc.get_playlist_id_for_name("My Playlist")
+    assert "id" in str(caught.value)
+    assert "missing" in str(caught.value)
+
+
+def test_get_playlist_length_non_numeric_total_names_the_field(svc):
+    _mock_session_get(svc, error_json={"meta": {"total": "many"}})
+    with pytest.raises(ValueError) as caught:
+        svc._AppleMusicService__get_playlist_length("pl1")
+    message = str(caught.value)
+    assert "Apple Music" in message
+    assert "meta.total" in message
+    assert "not a number" in message
+
+
 # ---------------------------------------------------------------------------
 # sync
 # ---------------------------------------------------------------------------

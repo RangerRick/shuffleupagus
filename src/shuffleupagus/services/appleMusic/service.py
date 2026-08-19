@@ -5,11 +5,15 @@ from concurrent.futures import as_completed
 import applemusicpy
 import applescript
 
+from ...core.apiresponse import api_field, api_int, api_list
 from ...core.model import Album, Artist, Service, Track
 from ...core.util import logger, parse_retry_after
 from .model import AppleMusicAlbum, AppleMusicArtist, AppleMusicTrack, sanitize_id
 
 _REQUEST_TIMEOUT = 30
+
+# Named in every message raised from an unexpected API response.
+_SERVICE_LABEL = "Apple Music"
 
 # applemusicpy defaults to 10 retries with an escalating sleep (~65s per call) and
 # ignores Retry-After entirely. Keep enough retries for a transient 5xx, few enough
@@ -318,7 +322,7 @@ class AppleMusicService(Service):
             if r.status_code >= 200 and r.status_code < 300:
                 j = r.json()
                 if "meta" in j:
-                    return int(j["meta"]["total"])
+                    return api_int(j, ("meta", "total"), _SERVICE_LABEL)
             else:
                 # instead of returning 0 values, the API throws a 404 with a "No related resources" error
                 if r.json()["errors"] and len(r.json()["errors"]) > 0:
@@ -341,11 +345,10 @@ class AppleMusicService(Service):
                 timeout=self.client.session_length,
             )
             if r.status_code >= 200 and r.status_code < 300:
-                if r.json()["data"] and len(r.json()["data"]) > 0:
-                    for playlist in r.json()["data"]:
-                        attrs = playlist.get("attributes", {})
-                        if attrs.get("name") == playlist_name:
-                            return playlist["id"]
+                for playlist in api_list(r.json(), ("data",), _SERVICE_LABEL):
+                    attrs = playlist.get("attributes", {}) if isinstance(playlist, dict) else {}
+                    if attrs.get("name") == playlist_name:
+                        return str(api_field(playlist, ("id",), _SERVICE_LABEL))
             else:
                 logger.error(f"{self.tag}  ! error fetching playlists: {r.status_code} {r.reason}")
                 if len(r.text.strip()) > 0:

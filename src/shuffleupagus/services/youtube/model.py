@@ -1,6 +1,10 @@
 from collections.abc import Sequence
 
 from ...core import model
+from ...core.apiresponse import api_int
+
+# Named in every message raised from an unexpected API response.
+_SERVICE_LABEL = "YouTube"
 
 
 def sanitize_id(id: str) -> str:
@@ -116,7 +120,7 @@ class YoutubeTrack(model.Track):
             return YoutubeTrack(
                 id=obj["videoId"],
                 name=obj["title"],
-                duration_ms=(int(obj["duration_seconds"]) * 1000),
+                duration_ms=(api_int(obj, ("duration_seconds",), _SERVICE_LABEL) * 1000),
                 # isrc=obj.get('isrc'),
                 # album=YoutubeAlbum.from_dict(obj['album']),
                 # artists=[YoutubeArtist.from_dict(artist) for artist in obj.get('artists', [])]
@@ -126,7 +130,7 @@ class YoutubeTrack(model.Track):
             return YoutubeTrack(
                 id=obj["videoDetails"]["videoId"],
                 name=obj["videoDetails"]["title"],
-                duration_ms=(int(obj["videoDetails"]["lengthSeconds"]) * 1000),
+                duration_ms=(api_int(obj, ("videoDetails", "lengthSeconds"), _SERVICE_LABEL) * 1000),
                 # isrc=obj.get('isrc'),
                 # album=YoutubeAlbum.from_dict(obj['videoDetails']['album']),
                 # artists=[YoutubeArtist.from_dict(artist) for artist in obj['videoDetails'].get('artists', [])]
