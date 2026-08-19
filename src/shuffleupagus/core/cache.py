@@ -54,9 +54,18 @@ class Cache:
         self._reported: set[str] = set()
         print(f"* loading '{name}' cache", flush=True)
         path = self._db_path()
-        self._prepare_dir(os.path.dirname(path))
-        self._conn = sqlite3.connect(path, check_same_thread=False)
-        self._restrict(path)
+        # Opening is inside the policy too. An unwritable cache directory or a
+        # database that will not open is the most common real breakage of a
+        # cache, and it is exactly the case where a rebuildable file should
+        # cost a slower run rather than the whole run.
+        self._conn: sqlite3.Connection | None = None
+        try:
+            self._prepare_dir(os.path.dirname(path))
+            self._conn = sqlite3.connect(path, check_same_thread=False)
+            self._restrict(path)
+        except (OSError, sqlite3.Error) as exc:
+            self._degrade("opening", exc)
+            return
         try:
             self._conn.execute("PRAGMA journal_mode=WAL")
             self._conn.execute("PRAGMA synchronous=NORMAL")
@@ -71,6 +80,19 @@ class Cache:
             self._conn.commit()
         except sqlite3.DatabaseError as exc:
             self._degrade("opening", exc)
+
+    @property
+    def _db(self) -> sqlite3.Connection:
+        """The connection, for code that has already passed the _degraded gate.
+
+        _conn is None only when construction failed, and that also sets
+        _degraded, which every operation checks before reaching here. This says
+        that invariant out loud so the type checker can see it, rather than
+        leaving six call sites indexing an Optional.
+        """
+        if self._conn is None:
+            raise CacheUnavailableError(f"cache '{self.name}' was never opened. {self._remedy(sqlite3.Error())}")
+        return self._conn
 
     _DIR_MODE = 0o700
     _FILE_MODE = 0o600
@@ -149,10 +171,21 @@ class Cache:
             return
         self._reported.add(kind)
         print(
-            f"! cache '{self.name}' is unusable, continuing without it ({operation}): {str(exc)!r:.60}. "
+            f"! cache '{self.name}' is unusable, continuing without it ({operation}): {self._brief(exc)}. "
             f"{self._remedy(exc)}",
             flush=True,
         )
+
+    @staticmethod
+    def _brief(exc: Exception, limit: int = 60) -> str:
+        """A bounded repr of an untrusted message, marked when it was cut.
+
+        The sqlite message can carry a row this project does not control, so it
+        is truncated. Without the ellipsis the reader cannot tell whether they
+        are looking at the whole message or the first 60 characters of one.
+        """
+        text = repr(str(exc))
+        return text if len(text) <= limit else text[:limit] + "…"
 
     def _remedy(self, exc: Exception) -> str:
         """Advice that fits the failure, or none at all.
@@ -206,7 +239,7 @@ class Cache:
             if self._degraded:
                 return self._unusable(required, "read")
             try:
-                row = self._conn.execute(
+                row = self._db.execute(
                     "SELECT value, stored_at, ttl FROM cache WHERE key = ?",
                     (key,),
                 ).fetchone()
@@ -238,7 +271,7 @@ class Cache:
             if self._degraded:
                 return self._unusable(required, "read")
             try:
-                row = self._conn.execute("SELECT value FROM cache WHERE key = ?", (key,)).fetchone()
+                row = self._db.execute("SELECT value FROM cache WHERE key = ?", (key,)).fetchone()
             except sqlite3.DatabaseError as exc:
                 self._degrade("reading", exc)
                 return self._unusable(required, "read")
@@ -262,11 +295,11 @@ class Cache:
                 self._unusable(required, "written")
                 return obj
             try:
-                self._conn.execute(
+                self._db.execute(
                     "INSERT OR REPLACE INTO cache (key, value, stored_at, ttl) VALUES (?, ?, ?, ?)",
                     (key, json.dumps(obj), time.time(), effective_ttl),
                 )
-                self._conn.commit()
+                self._db.commit()
             except sqlite3.DatabaseError as exc:
                 self._degrade("writing", exc)
                 self._unusable(required, "written")
@@ -284,11 +317,11 @@ class Cache:
             if self._degraded:
                 return False
             try:
-                cursor = self._conn.execute(
+                cursor = self._db.execute(
                     "UPDATE cache SET stored_at = ? WHERE key = ?",
                     (time.time(), key),
                 )
-                self._conn.commit()
+                self._db.commit()
             except sqlite3.DatabaseError as exc:
                 self._degrade("updating", exc)
                 return False
@@ -301,8 +334,8 @@ class Cache:
             if self._degraded:
                 return False
             try:
-                cursor = self._conn.execute("DELETE FROM cache WHERE key = ?", (key,))
-                self._conn.commit()
+                cursor = self._db.execute("DELETE FROM cache WHERE key = ?", (key,))
+                self._db.commit()
             except sqlite3.DatabaseError as exc:
                 self._degrade("deleting", exc)
                 return False
@@ -319,11 +352,11 @@ class Cache:
             if self._degraded:
                 return 0
             try:
-                cursor = self._conn.execute(
+                cursor = self._db.execute(
                     "DELETE FROM cache WHERE (? - stored_at) > ttl",
                     (time.time(),),
                 )
-                self._conn.commit()
+                self._db.commit()
             except sqlite3.DatabaseError as exc:
                 self._degrade("evicting", exc)
                 return 0
@@ -343,17 +376,25 @@ class Cache:
         Closing twice is a no-op: teardown paths can reach this more than once,
         and making the second call raise would turn correct cleanup into an
         error.
+
+        _closed is set only once the connection is actually released. Setting it
+        first meant a close that raised left the descriptor open and the cache
+        marked closed, so nothing would ever try again — the one path where a
+        second call is not a no-op but a retry.
         """
         with self._lock:
             if self._closed:
                 return
-            self._closed = True
+            if self._conn is None:
+                # Construction failed before the connection existed.
+                self._closed = True
+                return
             try:
                 self._conn.close()
             except sqlite3.DatabaseError as exc:
-                # The connection is unusable either way, and _closed is already
-                # set, so the cache is released. Reporting is all that is left.
                 self._degrade("closing", exc)
+                return
+            self._closed = True
 
     def __enter__(self) -> Self:
         return self

@@ -632,3 +632,136 @@ def test_sqlite_sidecar_files_are_unreachable(tmp_path, monkeypatch):
     with Cache("test") as c:
         c.write("k", {"a": 1})
         assert _mode(db.parent) & 0o077 == 0
+
+
+# --- construction is inside the degradation policy (#73) ---
+
+
+def test_an_unwritable_cache_directory_degrades(tmp_path, monkeypatch, capsys):
+    """The most common real breakage, and the one the policy did not cover."""
+    parent = tmp_path / "readonly"
+    parent.mkdir(mode=0o500)
+    monkeypatch.setattr(Cache, "_db_path", lambda self: str(parent / "sub" / "test.db"))
+    try:
+        cache = Cache("test")
+        assert cache.read("k") is None
+        assert cache.write("k", {"a": 1}) == {"a": 1}
+        assert "unusable" in capsys.readouterr().out
+    finally:
+        parent.chmod(0o700)
+
+
+def test_an_unopenable_database_degrades(tmp_path, monkeypatch, capsys):
+    """A directory where the database name is taken by a directory."""
+    cachedir = tmp_path / "cachedir"
+    (cachedir / "test.db").mkdir(parents=True)
+    monkeypatch.setattr(Cache, "_db_path", lambda self: str(cachedir / "test.db"))
+    cache = Cache("test")
+    assert cache.read("k") is None
+    assert "unusable" in capsys.readouterr().out
+
+
+def test_a_degraded_construction_still_closes_cleanly(tmp_path, monkeypatch):
+    cachedir = tmp_path / "cachedir"
+    (cachedir / "test.db").mkdir(parents=True)
+    monkeypatch.setattr(Cache, "_db_path", lambda self: str(cachedir / "test.db"))
+    with Cache("test") as cache:
+        pass
+    assert cache.closed
+
+
+# --- close() releases the descriptor (#73) ---
+
+
+def test_close_releases_the_connection_even_when_it_raises(cache):
+    """_closed was set before the close, so a raising close leaked the fd."""
+    real = cache._conn
+    calls = []
+
+    class _RaisingClose:
+        def execute(self, *a, **k):
+            return real.execute(*a, **k)
+
+        def commit(self):
+            return real.commit()
+
+        def close(self):
+            calls.append(1)
+            if len(calls) == 1:
+                raise sqlite3.OperationalError("disk I/O error")
+            real.close()
+
+    cache._conn = _RaisingClose()
+    cache.close()
+    # A close that raised left the descriptor open, so the cache is NOT closed
+    # and a later call retries rather than being swallowed as a no-op.
+    assert not cache.closed
+    cache.close()
+    assert cache.closed
+    assert len(calls) == 2
+
+
+def test_close_is_still_idempotent_after_a_failure(cache):
+    cache.close()
+    cache.close()
+    assert cache.closed
+
+
+# --- a truncated message says so (#73) ---
+
+
+def test_a_truncated_message_is_marked_as_truncated(cache, capsys):
+    _break_conn(cache, sqlite3.DatabaseError("x" * 500))
+    cache.read("k")
+    out = capsys.readouterr().out
+    assert "…" in out or "..." in out
+
+
+def test_a_short_message_is_not_marked(cache, capsys):
+    _break_conn(cache, sqlite3.DatabaseError("short"))
+    cache.read("k")
+    out = capsys.readouterr().out
+    assert "…" not in out
+
+
+# --- the "absent or broken" conflation is deliberate (#73) ---
+
+
+def test_touch_answers_false_for_both_absent_and_broken(cache):
+    """No caller distinguishes them, and both mean the same thing to callers.
+
+    A failed touch just lets the entry expire on its own schedule, which is
+    what would have happened without the cache at all.
+    """
+    assert cache.touch("never-written") is False
+    _break_conn(cache)
+    assert cache.touch("also-broken") is False
+
+
+def test_delete_answers_false_for_both_absent_and_broken(cache):
+    assert cache.delete("never-written") is False
+    _break_conn(cache)
+    assert cache.delete("also-broken") is False
+
+
+def test_clean_answers_zero_for_both_nothing_expired_and_broken(cache):
+    assert cache._clean() == 0
+    _break_conn(cache)
+    assert cache._clean() == 0
+
+
+def test_a_failed_rate_limit_delete_is_harmless(tmp_path, monkeypatch):
+    """The one caller of delete() in a path that matters.
+
+    _check_rate_limit deletes an expired window as cleanup. If that delete is
+    lost, the stale row stays and the next run re-reads it, finds it expired
+    again, and returns — so the conflation costs a wasted row, not a wrong
+    answer.
+    """
+    monkeypatch.setattr(Cache, "_db_path", lambda self: str(tmp_path / f"{self.name}.db"))
+    with Cache("test") as c:
+        c.write("rate_limit_until", time.time() - 100)
+        _break_conn(c)
+        assert c.delete("rate_limit_until") is False
+        # The row is still there, and still reads as expired.
+        assert c.read_stale("rate_limit_until") is None
