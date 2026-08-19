@@ -304,3 +304,23 @@ def test_track_from_dict_video_details_wrong_container():
 def test_track_from_dict_reports_the_service():
     with pytest.raises(ApiResponseError, match="YouTube"):
         YoutubeTrack.from_dict({})
+
+
+@pytest.mark.parametrize("bad_year", [True, False, 2020, ["2020"], {"y": "2020"}])
+def test_album_from_dict_tolerates_a_non_string_year(bad_year):
+    """A truthy non-string used to reach .isdigit() and raise AttributeError."""
+    album = YoutubeAlbum.from_dict({"browseId": "b1", "title": "Album", "year": bad_year})
+    assert album.release_date is None
+
+
+@pytest.mark.parametrize("bad_type", [True, 2020, ["2020"]])
+def test_album_from_dict_tolerates_a_non_string_type(bad_type):
+    """'type' is the fallback year field and takes the same path."""
+    album = YoutubeAlbum.from_dict({"browseId": "b1", "title": "Album", "type": bad_type})
+    assert album.release_date is None
+
+
+def test_album_from_dict_still_reads_a_year_from_type():
+    album = YoutubeAlbum.from_dict({"browseId": "b1", "title": "Album", "year": "Single", "type": "2021"})
+    assert album.release_date is not None
+    assert album.release_date.year == 2021

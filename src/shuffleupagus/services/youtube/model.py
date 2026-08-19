@@ -92,8 +92,11 @@ class YoutubeAlbum(model.Album):
         # ytmusicapi inconsistently uses 'year' and 'type' across different response contexts.
         # In some responses, 'year' contains "Single" or "EP" instead of a year, and
         # 'type' contains the actual year. Validate that any value is a 4-digit number.
-        def _as_year(val: str | None) -> str | None:
-            return val if (val and val.isdigit() and len(val) == 4) else None
+        # isinstance before .isdigit: a truthy non-string passes `val and ...`
+        # and then raises AttributeError. ytmusicapi has been seen to put a
+        # bool or a number in either field, so this is not a theoretical shape.
+        def _as_year(val: object) -> str | None:
+            return val if (isinstance(val, str) and val.isdigit() and len(val) == 4) else None
 
         if not isinstance(album_id, str):
             raise ApiResponseError(
