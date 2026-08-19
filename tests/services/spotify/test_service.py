@@ -799,3 +799,28 @@ def test_get_album_tracks_rejects_a_non_list_cache_hit(svc, cached):
     svc.cache.write("album:alb1:tracks", cached)
     with pytest.raises(ApiResponseError, match="not a list"):
         svc.get_album_tracks(album)
+
+
+def test_playlist_track_ids_skips_a_null_track(svc):
+    """Spotify sends a null track for one removed from the catalogue."""
+    svc._call = MagicMock(return_value={"items": [{"track": None}, {"track": {"id": "t1"}}]})
+    assert svc._SpotifyService__get_playlist_track_ids("pl1") == ["t1"]
+
+
+def test_playlist_track_ids_skips_a_null_id(svc):
+    """A local file has no catalogue ID."""
+    svc._call = MagicMock(return_value={"items": [{"track": {"id": None}}, {"track": {"id": "t1"}}]})
+    assert svc._SpotifyService__get_playlist_track_ids("pl1") == ["t1"]
+
+
+def test_playlist_track_ids_rejects_a_non_object_track(svc):
+    """A present-but-malformed track is reported, not silently skipped."""
+    svc._call = MagicMock(return_value={"items": [{"track": "not an object"}]})
+    with pytest.raises(ApiResponseError, match="track is not an object"):
+        svc._SpotifyService__get_playlist_track_ids("pl1")
+
+
+def test_playlist_track_ids_rejects_a_non_string_id(svc):
+    svc._call = MagicMock(return_value={"items": [{"track": {"id": 42}}]})
+    with pytest.raises(ApiResponseError, match="not a string"):
+        svc._SpotifyService__get_playlist_track_ids("pl1")

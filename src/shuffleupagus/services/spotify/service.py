@@ -329,10 +329,16 @@ class SpotifyService(Service):
             items = api_list(results, ("items",), _SERVICE_LABEL) if api_has(results, "items") else []
             for item in items:
                 entry = api_object(item, "items[] entry", _SERVICE_LABEL)
-                # A null "track" is normal here: Spotify returns one for a track
+                # A null "track" is normal here: Spotify sends one for a track
                 # that has been removed from the catalogue but is still listed.
-                track = entry.get("track") or {}
-                if api_has(track, "id") and track["id"]:
+                # A "track" that is present and is not an object is not normal,
+                # so it is reported rather than skipped along with the nulls.
+                raw_track = entry.get("track")
+                if raw_track is None:
+                    continue
+                track = api_object(raw_track, "items[].track", _SERVICE_LABEL)
+                # A null ID means a local file, which has no catalogue ID to match.
+                if track.get("id") is not None:
                     ids.append(api_str(track, ("id",), _SERVICE_LABEL))
             if len(items) < 100:
                 break
