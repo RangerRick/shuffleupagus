@@ -185,7 +185,12 @@ class YoutubeService(Service):
         return True
 
     def _load_oauth_token(self, auth_file: Path) -> dict | None:
-        """Return token dict if file exists and looks like an OAuth token, else None."""
+        """Return the token dict, or None when there is no usable token.
+
+        None means "start the login flow": either no file, or a file whose
+        contents are not an OAuth token. A file that exists but cannot be read
+        raises instead, because re-authenticating would overwrite it.
+        """
         try:
             data = json.loads(auth_file.read_text())
             # A truncated or zeroed file parses as null/0/true, and the membership
@@ -198,7 +203,16 @@ class YoutubeService(Service):
         except json.JSONDecodeError as exc:
             logger.warning(f"{self.tag}* ignoring corrupt OAuth token file {auth_file}: {exc}")
         except OSError as exc:
-            logger.error(f"{self.tag}* cannot read OAuth token file {auth_file}: {exc}")
+            # Returning None here would be indistinguishable from "no token
+            # file", and the caller answers that by running the whole device-code
+            # flow and writing the result back over this same path. On a
+            # transient I/O error that destroys a working refresh token; on a
+            # permissions error the write fails too and it loops.
+            raise RuntimeError(
+                f"cannot read OAuth token file {auth_file}: {exc}. "
+                f"Check the file's permissions and the 'auth-file' config value, "
+                f"or delete it to force a fresh login."
+            ) from exc
         return None
 
     def _prompt_for_oauth(self, creds: OAuthCredentials, auth_file: Path) -> None:
