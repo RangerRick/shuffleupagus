@@ -18,8 +18,7 @@ settings.register_profile("default", deadline=None)
 settings.load_profile("default")
 
 
-@pytest.fixture(autouse=True)
-def _collect_garbage_after_each_test():
+def pytest_runtest_teardown(item):
     """Attribute a leaked resource to the test that leaked it.
 
     A ResourceWarning from a finalizer is unraisable, so pytest blames whichever
@@ -27,22 +26,23 @@ def _collect_garbage_after_each_test():
     that leaked. Sprint #44 hit this: an unclosed cache in the YouTube tests
     failed a test under tests/services/spotify/.
 
-    Collecting at the end of every test makes the attribution deterministic.
-    Measured on this suite: a leak in an early test is reported against that
-    test, and without this fixture it is reported against a later, unrelated one.
-
     A full collect, not a partial one. CPython promotes by surviving collections
-    rather than by elapsed time, so an allocation-heavy test can push its own
-    leaked objects into the oldest generation before it finishes — measured at
-    roughly 25,000 allocations, which a Hypothesis property test passes easily.
-    A gen-1 collect would miss exactly those, and the property tests are where
-    sprint #44's leak actually was.
+    rather than elapsed time, so an allocation-heavy test can push its own leaked
+    objects into the oldest generation before it finishes — measured at roughly
+    25,000 allocations, which a Hypothesis property test passes easily. A gen-1
+    collect misses exactly those, and the property tests are where sprint #44's
+    leak was.
 
-    Full collects are affordable here because _freeze_startup_heap has already
-    moved everything that existed at import time into the permanent generation,
-    so each collect walks only what the tests themselves created.
+    This is a teardown hook rather than a fixture because a fixture's teardown
+    still runs inside the test's own scope, where it collects PRNG objects
+    Hypothesis is holding by weakref and trips HypothesisWarning. The hook runs
+    after Hypothesis has finished with the item.
+
+    Full collects are affordable because _freeze_startup_heap has already moved
+    everything that existed at import time into the permanent generation, so each
+    collect walks only what the tests created.
     """
-    yield
+    del item
     gc.collect()
 
 
