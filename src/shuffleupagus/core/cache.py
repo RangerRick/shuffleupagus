@@ -38,21 +38,47 @@ class Cache:
         self.cutoff = cutoff
         self._lock = threading.Lock()
         self._closed = False
+        self._degraded = False
         print(f"* loading '{name}' cache", flush=True)
         path = self._db_path()
         os.makedirs(os.path.dirname(path), exist_ok=True)
         self._conn = sqlite3.connect(path, check_same_thread=False)
-        self._conn.execute("PRAGMA journal_mode=WAL")
-        self._conn.execute("PRAGMA synchronous=NORMAL")
-        self._conn.execute(
-            """CREATE TABLE IF NOT EXISTS cache (
-                key       TEXT PRIMARY KEY,
-                value     TEXT NOT NULL,
-                stored_at REAL NOT NULL,
-                ttl       REAL NOT NULL
-            )"""
+        try:
+            self._conn.execute("PRAGMA journal_mode=WAL")
+            self._conn.execute("PRAGMA synchronous=NORMAL")
+            self._conn.execute(
+                """CREATE TABLE IF NOT EXISTS cache (
+                    key       TEXT PRIMARY KEY,
+                    value     TEXT NOT NULL,
+                    stored_at REAL NOT NULL,
+                    ttl       REAL NOT NULL
+                )"""
+            )
+            self._conn.commit()
+        except sqlite3.DatabaseError as exc:
+            self._degrade("opening", exc)
+
+    def _degrade(self, operation: str, exc: sqlite3.DatabaseError) -> None:
+        """Report a database failure once, then carry on with a cold cache.
+
+        The cache is disposable: every value in it can be fetched again from the
+        service it came from. Aborting a run because a rebuildable file is
+        corrupt costs the user more than the slower run does, so a database
+        error degrades to a miss rather than raising.
+
+        Reported once per cache, because the failure that matters is "this cache
+        stopped working", and a per-key message would repeat it for every
+        lookup of the run. The sqlite message is truncated: it can carry a row
+        this project does not control.
+        """
+        if self._degraded:
+            return
+        self._degraded = True
+        print(
+            f"! cache '{self.name}' is unusable, continuing without it ({operation}): {str(exc)!r:.60}. "
+            f"Delete {self._db_path()} to rebuild it.",
+            flush=True,
         )
-        self._conn.commit()
 
     def _db_path(self):
         return os.path.expanduser(f"~/.cache/shuffleupagus/{self.name}.db")
@@ -73,13 +99,20 @@ class Cache:
             raise CacheClosedError(f"cache '{self.name}' is closed")
 
     def read(self, key: str):
-        """Return the cached value if present and not expired, else None."""
+        """Return the cached value if present and not expired, else None.
+
+        A database failure answers None, the same as a miss — see _degrade.
+        """
         with self._lock:
             self._require_open()
-            row = self._conn.execute(
-                "SELECT value, stored_at, ttl FROM cache WHERE key = ?",
-                (key,),
-            ).fetchone()
+            try:
+                row = self._conn.execute(
+                    "SELECT value, stored_at, ttl FROM cache WHERE key = ?",
+                    (key,),
+                ).fetchone()
+            except sqlite3.DatabaseError as exc:
+                self._degrade("reading", exc)
+                return None
         if row is None:
             return None
         value, stored_at, ttl = row
@@ -91,50 +124,75 @@ class Cache:
         """Return the cached value regardless of TTL, or None if absent."""
         with self._lock:
             self._require_open()
-            row = self._conn.execute("SELECT value FROM cache WHERE key = ?", (key,)).fetchone()
+            try:
+                row = self._conn.execute("SELECT value FROM cache WHERE key = ?", (key,)).fetchone()
+            except sqlite3.DatabaseError as exc:
+                self._degrade("reading", exc)
+                return None
         if row is None:
             return None
         return json.loads(row[0])
 
     def write(self, key: str, obj, ttl: float | None = None):
+        """Store a value and return it.
+
+        The value is returned whether or not the store succeeded: callers use
+        this to pass a freshly fetched object through, and a dead cache must not
+        turn a successful fetch into None.
+        """
         effective_ttl = ttl if ttl is not None else self.cutoff
         with self._lock:
             self._require_open()
-            self._conn.execute(
-                "INSERT OR REPLACE INTO cache (key, value, stored_at, ttl) VALUES (?, ?, ?, ?)",
-                (key, json.dumps(obj), time.time(), effective_ttl),
-            )
-            self._conn.commit()
+            try:
+                self._conn.execute(
+                    "INSERT OR REPLACE INTO cache (key, value, stored_at, ttl) VALUES (?, ?, ?, ?)",
+                    (key, json.dumps(obj), time.time(), effective_ttl),
+                )
+                self._conn.commit()
+            except sqlite3.DatabaseError as exc:
+                self._degrade("writing", exc)
         return obj
 
     def touch(self, key: str) -> bool:
         """Reset the timestamp of a cache entry to now."""
         with self._lock:
             self._require_open()
-            cursor = self._conn.execute(
-                "UPDATE cache SET stored_at = ? WHERE key = ?",
-                (time.time(), key),
-            )
-            self._conn.commit()
+            try:
+                cursor = self._conn.execute(
+                    "UPDATE cache SET stored_at = ? WHERE key = ?",
+                    (time.time(), key),
+                )
+                self._conn.commit()
+            except sqlite3.DatabaseError as exc:
+                self._degrade("updating", exc)
+                return False
         return cursor.rowcount > 0
 
     def delete(self, key: str) -> bool:
         """Remove a cache entry."""
         with self._lock:
             self._require_open()
-            cursor = self._conn.execute("DELETE FROM cache WHERE key = ?", (key,))
-            self._conn.commit()
+            try:
+                cursor = self._conn.execute("DELETE FROM cache WHERE key = ?", (key,))
+                self._conn.commit()
+            except sqlite3.DatabaseError as exc:
+                self._degrade("deleting", exc)
+                return False
         return cursor.rowcount > 0
 
     def _clean(self):
         """Evict expired entries. Returns count of evicted rows."""
         with self._lock:
             self._require_open()
-            cursor = self._conn.execute(
-                "DELETE FROM cache WHERE (? - stored_at) > ttl",
-                (time.time(),),
-            )
-            self._conn.commit()
+            try:
+                cursor = self._conn.execute(
+                    "DELETE FROM cache WHERE (? - stored_at) > ttl",
+                    (time.time(),),
+                )
+                self._conn.commit()
+            except sqlite3.DatabaseError as exc:
+                self._degrade("evicting", exc)
+                return 0
         return cursor.rowcount
 
     def save(self):
@@ -156,7 +214,12 @@ class Cache:
             if self._closed:
                 return
             self._closed = True
-            self._conn.close()
+            try:
+                self._conn.close()
+            except sqlite3.DatabaseError as exc:
+                # The connection is unusable either way, and _closed is already
+                # set, so the cache is released. Reporting is all that is left.
+                self._degrade("closing", exc)
 
     def __enter__(self) -> Self:
         return self
