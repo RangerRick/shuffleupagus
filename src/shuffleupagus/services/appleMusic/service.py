@@ -1,4 +1,3 @@
-import os
 import time
 from concurrent.futures import as_completed
 
@@ -6,6 +5,7 @@ import applemusicpy
 import applescript
 
 from ...core.apiresponse import api_int, api_list, api_object, api_str
+from ...core.config import get_filepath
 from ...core.model import Album, Artist, Service, Track
 from ...core.util import logger, parse_retry_after
 from .model import AppleMusicAlbum, AppleMusicArtist, AppleMusicTrack, sanitize_id
@@ -90,7 +90,10 @@ class AppleMusicService(Service):
         return val
 
     def login(self):
-        keyfile_path = os.path.join(os.path.expanduser("~/.config/shuffleupagus"), self._require_config("secret-key"))
+        # Through get_filepath, not os.path.join: secret-key comes from the
+        # user's config file, and joining it raw let it name a file anywhere.
+        # YouTube's auth-file has always gone through this; this one had not (#76).
+        keyfile_path = get_filepath(self._require_config("secret-key"))
         with open(keyfile_path) as keyfile:
             key = keyfile.read().strip()
 

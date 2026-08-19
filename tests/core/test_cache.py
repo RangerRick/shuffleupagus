@@ -1,4 +1,5 @@
 import os
+import re
 import sqlite3
 import stat
 import threading
@@ -872,3 +873,81 @@ def test_a_normal_database_still_opens_without_o_nofollow(tmp_path, monkeypatch)
         c.write("k", {"a": 1})
         assert c.read("k") == {"a": 1}
     assert _mode(db) & 0o077 == 0
+
+
+# --- the database path stays inside the cache root (#76) ---------------------
+
+
+@pytest.fixture
+def cache_root(tmp_path, monkeypatch):
+    """Redirect the cache root, leaving the real _db_path in place.
+
+    _CACHE_DIR is redirected rather than _db_path, so the containment guard
+    still runs and resolves against whatever the root currently is. Patching
+    _db_path — which most tests in this file do, because they only care where
+    the database lands — would skip the very check these tests are about.
+    """
+    import shuffleupagus.core.cache as cache_mod
+
+    root = tmp_path / "cache"
+    root.mkdir()
+    monkeypatch.setattr(cache_mod, "_CACHE_DIR", root)
+    return root
+
+
+def _named(name: str) -> Cache:
+    """A Cache with only its name set, so _db_path can be called in isolation.
+
+    Constructing one for real opens a database and leaks the connection unless
+    it is closed, and none of these tests want a database — they want the path
+    that would have been used.
+    """
+    cache = Cache.__new__(Cache)
+    cache.name = name
+    return cache
+
+
+@pytest.mark.parametrize("name", ["appleMusic", "spotify", "youtube"])
+def test_the_names_actually_in_use_are_accepted(cache_root, name):
+    """The three real service names must keep working."""
+    assert _named(name)._db_path() == str(cache_root / f"{name}.db")
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        "../escape",
+        "../../etc/passwd",
+        "/etc/passwd",
+        "sub/../../escape",
+    ],
+)
+@pytest.mark.usefixtures("cache_root")
+def test_a_name_that_leaves_the_cache_root_is_refused(name):
+    """Escaping the root is the whole point: _prepare_dir chmods what it creates.
+
+    The message has to carry the offending value, so that is asserted here for
+    every case rather than in a second test that re-runs one of them.
+    """
+    with pytest.raises(ValueError, match=rf"Path traversal.*{re.escape(repr(name + '.db'))}"):
+        _named(name)._db_path()
+
+
+def test_a_bare_dot_name_is_contained_rather_than_refused(cache_root):
+    """`..` is not a traversal here, because `.db` is appended before the join.
+
+    The name becomes the ordinary filename `...db`, which sits in the root. Worth
+    stating: it looks like it should be refused, and a future reader who moves
+    the suffix after the containment check would turn it into a real escape.
+    """
+    assert _named("..")._db_path() == str(cache_root / "...db")
+
+
+def test_a_subdirectory_name_stays_inside_the_root(cache_root):
+    """Contained, so not this issue's concern, and recorded so it isn't mistaken for one.
+
+    A separator in the name nests a directory under the root. _prepare_dir then
+    creates and chmods that directory -- but it is one the cache owns, not an
+    arbitrary one, which is the distinction #76 turns on.
+    """
+    assert _named("sub/inner")._db_path() == str(cache_root / "sub" / "inner.db")

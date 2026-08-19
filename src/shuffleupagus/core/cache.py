@@ -4,9 +4,14 @@ import sqlite3
 import stat
 import threading
 import time
+from pathlib import Path
 from typing import Self
 
+from .config import contained_path
+
 CACHE_DEFAULT_CUTOFF = 60 * 60 * 24 * 7 * 1.0  # 1 week
+
+_CACHE_DIR = Path("~/.cache/shuffleupagus").expanduser()
 
 # Absent on platforms without symlinks (Windows). Zero is a no-op in the flag
 # set, so the open still works and _prepare_file falls back to an islink check.
@@ -241,8 +246,16 @@ class Cache:
                 f"{self._remedy(sqlite3.DatabaseError())}"
             )
 
-    def _db_path(self):
-        return os.path.expanduser(f"~/.cache/shuffleupagus/{self.name}.db")
+    def _db_path(self) -> str:
+        """Where this cache's database lives, guaranteed to be under the root.
+
+        The guard matters because of what the path is used for rather than who
+        can reach it: `name` is a class attribute on each service, so nothing a
+        user or an API response supplies gets here today. But _prepare_dir
+        makedirs *and chmods* this path's parent, so a name that named its way
+        out of the root would hand that chmod an arbitrary directory. See #76.
+        """
+        return contained_path(_CACHE_DIR, f"{self.name}.db")
 
     @property
     def closed(self) -> bool:

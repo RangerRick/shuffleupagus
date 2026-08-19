@@ -3,6 +3,7 @@
 import os
 import tempfile
 import time
+from pathlib import Path
 from unittest.mock import patch
 
 from hypothesis import assume, given, settings
@@ -209,3 +210,41 @@ def test_independent_keys(key1, key2, v1, v2):
         cache.write(key2, v2)
         assert cache.read(key1) == v1
         assert cache.read(key2) == v2
+
+
+# --- path containment (#76) --------------------------------------------------
+
+
+# Arbitrary text alone essentially never produces "../", so the interesting
+# half of the invariant would go unexercised. These fragments steer Hypothesis
+# at real traversal spellings while text() still covers what nobody would think
+# to write down.
+_path_name = st.one_of(
+    st.text(max_size=60),
+    st.lists(
+        st.sampled_from(["..", ".", "/", "\\", "sub", "a", "~", "//", "../", "etc", "passwd", ""]),
+        max_size=8,
+    ).map("".join),
+)
+
+
+@given(name=_path_name)
+def test_the_database_path_never_leaves_the_cache_root(tmp_path_factory, name):
+    """For any name at all: either it is refused, or the path is under the root.
+
+    Stated as the invariant rather than as a list of the traversal spellings
+    somebody thought of. `..`, an absolute path, and a separator all reduce to
+    the same question.
+    """
+    import shuffleupagus.core.cache as cache_mod
+
+    root = tmp_path_factory.mktemp("cacheroot")
+    cache = Cache.__new__(Cache)
+    cache.name = name
+
+    with patch.object(cache_mod, "_CACHE_DIR", root):
+        try:
+            resolved = cache._db_path()
+        except ValueError:
+            return
+    assert Path(resolved).is_relative_to(root.resolve())
