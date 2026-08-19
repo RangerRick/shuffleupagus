@@ -1,6 +1,7 @@
 import json
 import os
 import sqlite3
+import stat
 import threading
 import time
 from typing import Self
@@ -53,8 +54,9 @@ class Cache:
         self._reported: set[str] = set()
         print(f"* loading '{name}' cache", flush=True)
         path = self._db_path()
-        os.makedirs(os.path.dirname(path), exist_ok=True)
+        self._prepare_dir(os.path.dirname(path))
         self._conn = sqlite3.connect(path, check_same_thread=False)
+        self._restrict(path)
         try:
             self._conn.execute("PRAGMA journal_mode=WAL")
             self._conn.execute("PRAGMA synchronous=NORMAL")
@@ -69,6 +71,35 @@ class Cache:
             self._conn.commit()
         except sqlite3.DatabaseError as exc:
             self._degrade("opening", exc)
+
+    _DIR_MODE = 0o700
+    _FILE_MODE = 0o600
+
+    def _prepare_dir(self, directory: str) -> None:
+        """Create the cache directory private, and tighten one left by an older version.
+
+        The directory mode is the control that matters. sqlite creates the
+        `-wal` and `-shm` sidecar files itself, under its own umask, so their
+        modes are not ours to set — a directory nobody else can traverse is
+        what keeps them unreachable.
+
+        The chmod is not redundant with the makedirs mode: makedirs applies a
+        mode only to directories it actually creates, so an upgrade from a
+        version that left 0755 behind would otherwise stay exposed forever.
+        """
+        os.makedirs(directory, mode=self._DIR_MODE, exist_ok=True)
+        if stat.S_IMODE(os.stat(directory).st_mode) & 0o077:
+            os.chmod(directory, self._DIR_MODE)
+
+    def _restrict(self, path: str) -> None:
+        """Take group and other off the database file.
+
+        Defence in depth behind the directory mode. sqlite creates the file
+        under the process umask, which on a default umask of 022 leaves it
+        world-readable.
+        """
+        if stat.S_IMODE(os.stat(path).st_mode) & 0o077:
+            os.chmod(path, self._FILE_MODE)
 
     def _decode(self, value: str, required: bool = False):
         """Decode a stored value, degrading to a miss if it is not valid JSON.

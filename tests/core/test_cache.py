@@ -1,4 +1,6 @@
+import os
 import sqlite3
+import stat
 import threading
 import time
 
@@ -580,3 +582,53 @@ def test_read_survives_a_non_numeric_stored_at(cache):
     cache._conn.execute("UPDATE cache SET stored_at = ? WHERE key = ?", ("not a time", "key1"))
     cache._conn.commit()
     assert cache.read("key1") is None
+
+
+# --- file permissions (#71) ---
+
+
+def _mode(path) -> int:
+    return stat.S_IMODE(os.stat(path).st_mode)
+
+
+def test_cache_directory_is_private(tmp_path, monkeypatch):
+    db = tmp_path / "cachedir" / "test.db"
+    monkeypatch.setattr(Cache, "_db_path", lambda self: str(db))
+    with Cache("test"):
+        assert _mode(db.parent) == 0o700
+
+
+def test_cache_database_is_private(tmp_path, monkeypatch):
+    db = tmp_path / "cachedir" / "test.db"
+    monkeypatch.setattr(Cache, "_db_path", lambda self: str(db))
+    with Cache("test") as c:
+        c.write("k", {"a": 1})
+        assert _mode(db) & 0o077 == 0
+
+
+def test_an_existing_world_readable_directory_is_tightened(tmp_path, monkeypatch):
+    """A directory left behind by an earlier version keeps its old mode.
+
+    makedirs(mode=...) only applies to directories it actually creates, so an
+    upgrade would otherwise stay exposed forever.
+    """
+    cachedir = tmp_path / "cachedir"
+    cachedir.mkdir(mode=0o755)
+    db = cachedir / "test.db"
+    monkeypatch.setattr(Cache, "_db_path", lambda self: str(db))
+    with Cache("test"):
+        assert _mode(cachedir) == 0o700
+
+
+def test_sqlite_sidecar_files_are_unreachable(tmp_path, monkeypatch):
+    """WAL and shared-memory files are created by sqlite, not by us.
+
+    Their own modes are sqlite's business; a 0700 directory is what stops
+    another user reaching them, which is why the directory mode is the check
+    that matters.
+    """
+    db = tmp_path / "cachedir" / "test.db"
+    monkeypatch.setattr(Cache, "_db_path", lambda self: str(db))
+    with Cache("test") as c:
+        c.write("k", {"a": 1})
+        assert _mode(db.parent) & 0o077 == 0
