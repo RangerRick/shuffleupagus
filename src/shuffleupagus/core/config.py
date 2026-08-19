@@ -13,6 +13,37 @@ def get_filepath(name: str) -> str:
     return str(resolved)
 
 
+def _load_yaml_mapping(path: str, empty_ok: bool = False) -> dict:
+    """Parse a hand-edited YAML file that must hold a mapping.
+
+    RuntimeError rather than the yaml.YAMLError, because these two files are
+    edited by hand and a scanner traceback names a column offset and nothing
+    the reader can act on. The mark YAML reports is kept, since the line number
+    is the one genuinely useful part of it.
+    """
+    with open(path) as f:
+        try:
+            data = yaml.safe_load(f)
+        except yaml.YAMLError as exc:
+            mark = getattr(exc, "problem_mark", None)
+            where = f" at line {mark.line + 1}, column {mark.column + 1}" if mark else ""
+            problem = getattr(exc, "problem", None) or "could not be parsed"
+            raise RuntimeError(f"{path} is not valid YAML{where}: {problem}. Fix the syntax and retry.") from exc
+
+    if data is None:
+        if empty_ok:
+            return {}
+        raise RuntimeError(f"{path} is empty. Populate it, or delete it to start from the defaults.")
+
+    # runner logs those with a traceback. This is a file the user hand-edited, so
+    # it takes the RuntimeError path that prints a message and no traceback.
+    if not isinstance(data, dict):
+        raise RuntimeError(  # noqa: TRY004
+            f"{path} must hold a mapping at the top level, not a {type(data).__name__}."
+        )
+    return data
+
+
 class Config:
     __service_config: dict = {}
     __artist_config: dict = {}
@@ -22,17 +53,21 @@ class Config:
         if not os.path.exists(app_config_path):
             raise FileNotFoundError(f"Config file not found: {app_config_path}")
 
-        with open(app_config_path) as f:
-            config_data = yaml.safe_load(f)
-            self.__service_config = config_data.get("services", {})
+        config_data = _load_yaml_mapping(app_config_path)
+        services = config_data.get("services", {})
+        if not isinstance(services, dict):
+            raise RuntimeError(  # noqa: TRY004 — a hand-edited file, see _load_yaml_mapping
+                f"{app_config_path}: 'services' must be a mapping, not a {type(services).__name__}."
+            )
+        self.__service_config = services
 
         artist_config_path = get_filepath("artists.yaml")
         if not os.path.exists(artist_config_path):
             raise FileNotFoundError(f"Config file not found: {artist_config_path}")
 
-        with open(artist_config_path) as f:
-            artist_data = yaml.safe_load(f)
-            self.__artist_config = artist_data
+        # An empty artists.yaml is a legitimate first-run state: nothing to sync
+        # yet. An empty config.yaml is not, since it names the services to run.
+        self.__artist_config = _load_yaml_mapping(artist_config_path, empty_ok=True)
 
     def is_enabled(self, name: str) -> bool:
         return self.__service_config.get(name, {}).get("enabled", True)

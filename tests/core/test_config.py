@@ -150,3 +150,83 @@ def test_missing_config_file_raises(tmp_path, monkeypatch):
     )
     with pytest.raises(FileNotFoundError):
         Config()
+
+
+# --- malformed YAML (#60) ---
+
+
+def _configure_paths(tmp_path, monkeypatch):
+    import shuffleupagus.core.config as cfg_mod
+
+    cfg_dir = tmp_path / ".config" / "shuffleupagus"
+    cfg_dir.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setattr(cfg_mod, "get_filepath", lambda name: str(cfg_dir / name))
+    return cfg_dir
+
+
+def test_malformed_service_config_names_the_file(tmp_path, monkeypatch):
+    cfg_dir = _configure_paths(tmp_path, monkeypatch)
+    (cfg_dir / "config.yaml").write_text("services:\n  spotify:\n   - unclosed: '\n")
+    (cfg_dir / "artists.yaml").write_text(yaml.dump({}))
+
+    with pytest.raises(RuntimeError) as excinfo:
+        Config()
+    assert "config.yaml" in str(excinfo.value)
+
+
+def test_malformed_artist_config_names_the_file(tmp_path, monkeypatch):
+    cfg_dir = _configure_paths(tmp_path, monkeypatch)
+    (cfg_dir / "config.yaml").write_text(yaml.dump({"services": {}}))
+    (cfg_dir / "artists.yaml").write_text("Artist A:\n\tservices: bad tab\n")
+
+    with pytest.raises(RuntimeError) as excinfo:
+        Config()
+    assert "artists.yaml" in str(excinfo.value)
+
+
+def test_malformed_config_reports_the_line(tmp_path, monkeypatch):
+    cfg_dir = _configure_paths(tmp_path, monkeypatch)
+    (cfg_dir / "config.yaml").write_text("services:\n  spotify:\n   - unclosed: '\n")
+    (cfg_dir / "artists.yaml").write_text(yaml.dump({}))
+
+    with pytest.raises(RuntimeError) as excinfo:
+        Config()
+    assert "line" in str(excinfo.value).lower()
+
+
+def test_malformed_config_does_not_leak_a_yaml_error(tmp_path, monkeypatch):
+    cfg_dir = _configure_paths(tmp_path, monkeypatch)
+    (cfg_dir / "config.yaml").write_text("services: [unclosed\n")
+    (cfg_dir / "artists.yaml").write_text(yaml.dump({}))
+
+    with pytest.raises(RuntimeError) as excinfo:
+        Config()
+    assert not isinstance(excinfo.value, yaml.YAMLError)
+
+
+def test_non_mapping_service_config_is_rejected(tmp_path, monkeypatch):
+    cfg_dir = _configure_paths(tmp_path, monkeypatch)
+    (cfg_dir / "config.yaml").write_text("- just\n- a\n- list\n")
+    (cfg_dir / "artists.yaml").write_text(yaml.dump({}))
+
+    with pytest.raises(RuntimeError) as excinfo:
+        Config()
+    assert "config.yaml" in str(excinfo.value)
+
+
+def test_empty_config_file_is_rejected(tmp_path, monkeypatch):
+    cfg_dir = _configure_paths(tmp_path, monkeypatch)
+    (cfg_dir / "config.yaml").write_text("")
+    (cfg_dir / "artists.yaml").write_text(yaml.dump({}))
+
+    with pytest.raises(RuntimeError) as excinfo:
+        Config()
+    assert "config.yaml" in str(excinfo.value)
+
+
+def test_empty_artist_file_is_an_empty_mapping(tmp_path, monkeypatch):
+    cfg_dir = _configure_paths(tmp_path, monkeypatch)
+    (cfg_dir / "config.yaml").write_text(yaml.dump({"services": {}}))
+    (cfg_dir / "artists.yaml").write_text("")
+
+    assert Config().artists() == {}
