@@ -212,14 +212,24 @@ class Service:
     _RATE_LIMIT_CACHE_KEY = "rate_limit_until"
 
     def _record_rate_limit(self, service_label: str, retry_after: int) -> str:
-        """Persist a rate-limit window so the next run fails fast. Returns the message."""
+        """Persist a rate-limit window so the next run fails fast. Returns the message.
+
+        required=True: this is the one thing in the cache that cannot be
+        fetched again, because the API is refusing to answer. A silently
+        dropped window lets the next run walk straight back into the ban.
+        """
         retry_epoch = time.time() + retry_after
-        self.cache.write(self._RATE_LIMIT_CACHE_KEY, retry_epoch, ttl=retry_after)
+        self.cache.write(self._RATE_LIMIT_CACHE_KEY, retry_epoch, ttl=retry_after, required=True)
         return format_retry_message(service_label, retry_epoch, retry_after)
 
     def _check_rate_limit(self, service_label: str) -> None:
-        """Fail fast if an earlier run recorded a rate-limit window still in effect."""
-        retry_epoch = self.cache.read_stale(self._RATE_LIMIT_CACHE_KEY)
+        """Fail fast if an earlier run recorded a rate-limit window still in effect.
+
+        required=True for the same reason as _record_rate_limit: a database
+        failure here is indistinguishable from "no window recorded", and
+        guessing "no window" is the dangerous direction to guess.
+        """
+        retry_epoch = self.cache.read_stale(self._RATE_LIMIT_CACHE_KEY, required=True)
         if not retry_epoch:
             return
         remaining = retry_epoch - time.time()

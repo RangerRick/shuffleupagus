@@ -4,7 +4,12 @@ import time
 
 import pytest
 
-from shuffleupagus.core.cache import CACHE_DEFAULT_CUTOFF, Cache, CacheClosedError
+from shuffleupagus.core.cache import (
+    CACHE_DEFAULT_CUTOFF,
+    Cache,
+    CacheClosedError,
+    CacheUnavailableError,
+)
 
 
 @pytest.fixture
@@ -457,3 +462,121 @@ def test_decode_survives_a_non_text_value(cache, stored):
     exercised directly. File corruption does not go through those rules.
     """
     assert cache._decode(stored) is None
+
+
+# --- required: values the caller cannot rebuild (#60 follow-up) ---
+
+
+def test_required_read_raises_instead_of_missing(broken_cache):
+    with pytest.raises(CacheUnavailableError, match="cannot be rebuilt"):
+        broken_cache.read("key1", required=True)
+
+
+def test_required_read_stale_raises_instead_of_missing(broken_cache):
+    with pytest.raises(CacheUnavailableError, match="cannot be rebuilt"):
+        broken_cache.read_stale("key1", required=True)
+
+
+def test_required_write_raises_instead_of_swallowing(broken_cache):
+    with pytest.raises(CacheUnavailableError, match="cannot be rebuilt"):
+        broken_cache.write("key1", {"data": 42}, required=True)
+
+
+def test_required_still_raises_once_already_degraded(broken_cache):
+    broken_cache.read("key1")
+    assert broken_cache._degraded
+    with pytest.raises(CacheUnavailableError):
+        broken_cache.read_stale("key1", required=True)
+
+
+def test_unrequired_calls_still_degrade_quietly(broken_cache):
+    assert broken_cache.read("key1") is None
+    assert broken_cache.write("key1", {"a": 1}) == {"a": 1}
+
+
+def test_required_read_raises_on_an_undecodable_value(cache):
+    cache.write("key1", {"data": 42})
+    cache._conn.execute("UPDATE cache SET value = ? WHERE key = ?", ("{not json", "key1"))
+    cache._conn.commit()
+    with pytest.raises(CacheUnavailableError):
+        cache.read("key1", required=True)
+
+
+# --- a programming error is a bug here, not a broken file ---
+
+
+def test_a_programming_error_is_not_degraded(cache):
+    broken = _BrokenConn(sqlite3.ProgrammingError("Incorrect number of bindings supplied"))
+    real, cache._conn = cache._conn, broken
+    try:
+        with pytest.raises(sqlite3.ProgrammingError):
+            cache.read("key1")
+        assert not cache._degraded
+    finally:
+        # Put the working connection back, or the fixture's own teardown hits
+        # the same error and reports it as a fixture failure.
+        cache._conn = real
+
+
+# --- the cache goes cold, not flaky ---
+
+
+def test_no_statement_is_issued_once_degraded(cache):
+    _break_conn(cache)
+    cache.read("key1")
+    cache._conn = _CountingConn()
+    assert cache.read("key1") is None
+    assert cache.write("key1", {"a": 1}) == {"a": 1}
+    assert cache.touch("key1") is False
+    assert cache.delete("key1") is False
+    assert cache._clean() == 0
+    assert cache._conn.calls == 0
+
+
+class _CountingConn:
+    """Records whether the cache touched the database at all."""
+
+    def __init__(self):
+        self.calls = 0
+
+    def execute(self, *args, **kwargs):
+        self.calls += 1
+        raise AssertionError("a degraded cache issued a statement")
+
+    def commit(self):
+        self.calls += 1
+
+    def close(self):
+        pass
+
+
+# --- each distinct failure is reported once ---
+
+
+def test_a_second_different_failure_is_still_reported(cache, capsys):
+    _break_conn(cache, sqlite3.OperationalError("database is locked"))
+    cache.read("a")
+    cache._conn = _BrokenConn(sqlite3.DatabaseError("database disk image is malformed"))
+    cache._degraded = False
+    cache.read("b")
+    out = capsys.readouterr().out
+    assert "locked" in out
+    assert "malformed" in out
+
+
+def test_a_lock_does_not_advise_deleting_the_database(cache, capsys):
+    _break_conn(cache, sqlite3.OperationalError("database is locked"))
+    cache.read("a")
+    out = capsys.readouterr().out
+    assert "Delete" not in out
+    assert "Another shuffleupagus process" in out
+
+
+# --- corrupt timestamps ---
+
+
+def test_read_survives_a_non_numeric_stored_at(cache):
+    cache.write("key1", {"data": 42})
+    cache._conn.execute("UPDATE cache SET stored_at = ? WHERE key = ?", ("not a time", "key1"))
+    cache._conn.commit()
+    assert cache.read("key1") is None
