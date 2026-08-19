@@ -66,6 +66,21 @@
       "matchPackageNames": ["/^pytest/"],
     },
 
+    {
+      // requires-python states which Pythons this project supports. It is not a
+      // dependency to keep current, and "bump" treats it like one: every patch
+      // release raised the floor, the non-major rule automerged it, and
+      // Dependabot then refused to submit the dependency graph because it cannot
+      // satisfy a patch-level floor (#65). It also broke CI once, in #54.
+      //
+      // Renovate's pep621 manager extracts it as depName "python". If a future
+      // Renovate run raises requires-python anyway, this matcher stopped
+      // matching — that is the failure mode to check first.
+      "matchManagers": ["pep621"],
+      "matchDepNames": ["python"],
+      "enabled": false,
+    },
+
     // Last, so it overrides the groupName and automerge set by any rule above.
     // Majors get their own PR and a human read.
     {
