@@ -5,9 +5,9 @@ import time
 import unicodedata
 from collections.abc import Sequence
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from typing import Any
+from typing import Any, Self
 
-from .cache import CACHE_DEFAULT_CUTOFF, Cache
+from .cache import CACHE_DEFAULT_CUTOFF, Cache, CacheClosedError
 from .config import Config
 from .util import format_retry_message, logger, service_tag, spread_artist_playlists
 
@@ -122,6 +122,7 @@ class Service:
     cache_cutoff: float = CACHE_DEFAULT_CUTOFF
     _artist_pool: ThreadPoolExecutor | None = None
     _album_pool: ThreadPoolExecutor | None = None
+    _closed: bool = False
 
     @property
     def artist_pool(self) -> ThreadPoolExecutor:
@@ -170,16 +171,43 @@ class Service:
             if pool is not None:
                 pool.shutdown(wait=wait, cancel_futures=True)
 
+    @property
+    def closed(self) -> bool:
+        return self._closed
+
     def close(self) -> None:
         """Shut down the worker pools, evict expired entries, release the connection.
 
         Pools come down first, and with wait=True: a worker still running would
         otherwise reach for a cache connection that is already closed. This also
         stops the pools' non-daemon threads from holding up process exit.
+
+        Idempotent, like Cache.close(). _close_service in shuffleupagus.py can
+        reach this twice on the error path, and the second call would otherwise
+        hit cache.save() on an already-closed cache and raise.
         """
+        if self._closed:
+            return
+        self._closed = True
         self._shutdown_pools(wait=True)
-        self.cache.save()
-        self.cache.close()
+        # Same guarantee as Cache.__exit__: eviction failing must not leave the
+        # connection open, and _closed is already set so nothing retries this.
+        # A cache another holder already closed is not a teardown failure, and
+        # raising here would mask whatever sent us into close().
+        try:
+            self.cache.save()
+        except CacheClosedError:
+            pass
+        finally:
+            self.cache.close()
+
+    def __enter__(self) -> Self:
+        return self
+
+    def __exit__(self, exc_type, exc_value, traceback) -> None:
+        # Same ownership rule as Cache: entering takes the pools and the cache,
+        # leaving releases them. A Service is owned by whoever constructed it.
+        self.close()
 
     _RATE_LIMIT_CACHE_KEY = "rate_limit_until"
 

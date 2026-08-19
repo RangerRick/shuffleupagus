@@ -1,10 +1,9 @@
-import sqlite3
 import threading
 import time
 
 import pytest
 
-from shuffleupagus.core.cache import CACHE_DEFAULT_CUTOFF, Cache
+from shuffleupagus.core.cache import CACHE_DEFAULT_CUTOFF, Cache, CacheClosedError
 
 
 @pytest.fixture
@@ -35,7 +34,7 @@ def test_context_manager_returns_cache_and_closes(tmp_path, monkeypatch):
         assert isinstance(c, Cache)
         c.write("key", "value")
         assert c.read("key") == "value"
-    with pytest.raises(sqlite3.ProgrammingError):
+    with pytest.raises(CacheClosedError):
         c.read("key")
 
 
@@ -43,7 +42,7 @@ def test_context_manager_closes_on_exception(tmp_path, monkeypatch):
     monkeypatch.setattr(Cache, "_db_path", lambda self: str(tmp_path / f"{self.name}.db"))
     with pytest.raises(ValueError), Cache("ctx_err") as c:
         raise ValueError("boom")
-    with pytest.raises(sqlite3.ProgrammingError):
+    with pytest.raises(CacheClosedError):
         c.read("key")
 
 
@@ -206,7 +205,7 @@ def test_close_releases_connection(cache):
     """close() closes the sqlite connection, so later use raises."""
     cache.write("k", "v")
     cache.close()
-    with pytest.raises(sqlite3.ProgrammingError):
+    with pytest.raises(CacheClosedError):
         cache.read("k")
 
 
@@ -227,3 +226,99 @@ def test_close_takes_the_lock(cache):
     cache._lock = _TrackingLock()
     cache.close()
     assert acquired, "close() did not take the lock"
+
+
+# ---------------------------------------------------------------------------
+# Closed-cache semantics (#49)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "call",
+    [
+        lambda c: c.read("k"),
+        lambda c: c.read_stale("k"),
+        lambda c: c.write("k", "v"),
+        lambda c: c.touch("k"),
+        lambda c: c.delete("k"),
+        lambda c: c.save(),
+        lambda c: c._clean(),
+    ],
+)
+def test_every_entry_point_names_the_cache_when_closed(cache, call):
+    """A closed cache must say which cache, not raise a bare sqlite3 error."""
+    cache.close()
+    with pytest.raises(CacheClosedError) as caught:
+        call(cache)
+    assert "test" in str(caught.value)
+
+
+def test_close_is_idempotent(cache):
+    """Teardown paths can reach close() more than once."""
+    cache.close()
+    cache.close()
+
+
+def test_closed_is_observable(cache):
+    assert cache.closed is False
+    cache.close()
+    assert cache.closed is True
+
+
+def test_context_manager_evicts_before_closing(tmp_path, monkeypatch):
+    """__exit__ runs eviction, matching what Service.close does."""
+    monkeypatch.setattr(Cache, "_db_path", lambda self: str(tmp_path / f"{self.name}.db"))
+    with Cache("evict") as c:
+        _inject_stale(c, "old", "v", ttl=60.0, age=3600)
+        c.write("fresh", "v", ttl=10**9)
+    with Cache("evict") as c2:
+        assert c2.read_stale("old") is None, "expired entry survived the with block"
+        assert c2.read("fresh") == "v"
+
+
+def test_context_manager_exit_tolerates_an_already_closed_cache(tmp_path, monkeypatch):
+    monkeypatch.setattr(Cache, "_db_path", lambda self: str(tmp_path / f"{self.name}.db"))
+    with Cache("early") as c:
+        c.close()
+    assert c.closed is True
+
+
+def test_exit_closes_even_when_eviction_fails(tmp_path, monkeypatch):
+    """__exit__ exists to guarantee release. A failing save() must not leak."""
+    monkeypatch.setattr(Cache, "_db_path", lambda self: str(tmp_path / f"{self.name}.db"))
+    c = Cache("evict_fail")
+    monkeypatch.setattr(Cache, "_clean", lambda self: (_ for _ in ()).throw(RuntimeError("boom")))
+    with pytest.raises(RuntimeError, match="boom"):
+        c.__exit__(None, None, None)
+    assert c.closed is True, "connection leaked when eviction raised"
+
+
+def test_exit_tolerates_another_holder_closing_first(tmp_path, monkeypatch):
+    """The unlocked check is a race; __exit__ must not raise because it lost it."""
+    monkeypatch.setattr(Cache, "_db_path", lambda self: str(tmp_path / f"{self.name}.db"))
+    c = Cache("race")
+    original_save = Cache.save
+
+    def racing_save(self):
+        self.close()  # stands in for another thread winning the race
+        return original_save(self)
+
+    monkeypatch.setattr(Cache, "save", racing_save)
+    c.__exit__(None, None, None)
+    assert c.closed is True
+
+
+def test_exit_does_not_mask_the_bodys_exception(tmp_path, monkeypatch):
+    """A teardown error must not replace the error the caller cares about."""
+    monkeypatch.setattr(Cache, "_db_path", lambda self: str(tmp_path / f"{self.name}.db"))
+    c = Cache("mask")
+    original_save = Cache.save
+
+    def racing_save(self):
+        self.close()
+        return original_save(self)
+
+    monkeypatch.setattr(Cache, "save", racing_save)
+    with pytest.raises(ValueError, match="the real error"), c:
+        raise ValueError("the real error")
+    assert c.closed is True
