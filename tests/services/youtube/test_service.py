@@ -1292,12 +1292,27 @@ def test_get_artist_tracks_no_albums_returns_empty(svc):
 
 
 def test_get_artist_tracks_handles_album_error(svc):
+    """An unexpected error still skips the one album and keeps going."""
     artist = YoutubeArtist("UCabc", "Band")
     artist.inlineAlbums = [{"browseId": "MPL1", "title": "Album 1", "year": "2020"}]
-    svc.client.get_album.side_effect = RuntimeError("boom")
+    svc.client.get_album.side_effect = ValueError("boom")
     svc._album_pool = ThreadPoolExecutor(max_workers=1)
     tracks = svc.get_artist_tracks(artist)
     assert tracks == []
+
+
+def test_get_artist_tracks_does_not_swallow_the_abort_signal(svc):
+    """RuntimeError is the convention's "abort this service" signal.
+
+    Swallowing it here turned a rate-limit window or an unusable cache back
+    into a silently missing album.
+    """
+    artist = YoutubeArtist("UCabc", "Band")
+    artist.inlineAlbums = [{"browseId": "MPL1", "title": "Album 1", "year": "2020"}]
+    svc.client.get_album.side_effect = RuntimeError("Spotify rate-limited")
+    svc._album_pool = ThreadPoolExecutor(max_workers=1)
+    with pytest.raises(RuntimeError, match="rate-limited"):
+        svc.get_artist_tracks(artist)
 
 
 # ---------------------------------------------------------------------------

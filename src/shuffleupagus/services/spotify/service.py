@@ -262,14 +262,26 @@ class SpotifyService(Service):
 
         tracks: list[Track] = []
         futures = {self.album_pool.submit(self.get_album_tracks, album): album for album in albums}
+        fatal_error = None
         for future in as_completed(futures):
             album = futures[future]
             try:
                 tracks += future.result()
+            except RuntimeError as exc:
+                # RuntimeError is the convention's "abort this service" signal —
+                # a rate-limit window, an unusable cache, a fetch that failed
+                # rather than found nothing. Logging it here and carrying on
+                # turns it straight back into a silently missing album, which
+                # is the thing raising it was meant to stop.
+                fatal_error = exc
+                break
             except Exception:
                 logger.exception(
                     f"{self.tag}  ! error fetching tracks for album '{album.name}' (artist: {artist.name}), skipping"
                 )
+
+        if fatal_error is not None:
+            raise fatal_error
 
         return tracks
 

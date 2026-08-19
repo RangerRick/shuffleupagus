@@ -1,6 +1,7 @@
 """Tests for AppleMusicService with all network/applescript calls mocked."""
 
 import time
+from concurrent.futures import ThreadPoolExecutor
 from unittest.mock import MagicMock, patch
 
 import applescript
@@ -1137,3 +1138,34 @@ def test_the_message_names_the_artist(svc):
     with pytest.raises(RuntimeError) as excinfo:
         svc.get_artist("a1")
     assert "a1" in str(excinfo.value)
+
+
+def test_get_artist_tracks_does_not_swallow_the_abort_signal(svc):
+    """RuntimeError is the convention's "abort this service" signal.
+
+    The album pool caught Exception and logged, so a fetch failure raised by
+    _absent_or_raise was turned straight back into a silently skipped album.
+    """
+    album = MagicMock(id="alb1", name="Album")
+    svc.get_artist_albums = MagicMock(return_value=[album])
+    svc.get_album_tracks = MagicMock(side_effect=RuntimeError("Apple Music could not fetch album tracks"))
+    svc._album_pool = ThreadPoolExecutor(max_workers=1)
+    with pytest.raises(RuntimeError, match="could not fetch album tracks"):
+        svc.get_artist_tracks(MagicMock(id="a1", name="Artist"))
+
+
+def test_get_artist_tracks_still_skips_an_unexpected_error(svc):
+    """Anything that is not the abort signal keeps the per-album skip."""
+    album = MagicMock(id="alb1", name="Album")
+    svc.get_artist_albums = MagicMock(return_value=[album])
+    svc.get_album_tracks = MagicMock(side_effect=ValueError("malformed album response"))
+    svc._album_pool = ThreadPoolExecutor(max_workers=1)
+    assert svc.get_artist_tracks(MagicMock(id="a1", name="Artist")) == []
+
+
+def test_a_fetch_failure_message_is_bounded(svc):
+    """`which` is built from API response data at half the call sites."""
+    svc.client.artist.side_effect = Exception("y" * 5000)
+    with pytest.raises(RuntimeError) as excinfo:
+        svc.get_artist("x" * 5000)
+    assert len(str(excinfo.value)) < 500
