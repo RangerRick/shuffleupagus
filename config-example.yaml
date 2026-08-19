@@ -1,8 +1,11 @@
 "services":
   "appleMusic":
     enabled: false
-    # the path to your secret key, downloaded from the Apple developer portal
-    "secret-key": "~/Downloads/AuthKey_XXXXXXXXXX.p8"
+    # the secret key downloaded from the Apple developer portal, named relative
+    # to ~/.config/shuffleupagus — copy the .p8 file in there, same as auth-file
+    # below. A path with ~ in it does not work: nothing expands it, so it looks
+    # for a directory literally named "~".
+    "secret-key": "AuthKey_XXXXXXXXXX.p8"
     "key-id": "XXXXXXXXXX"
     "team-id": "YYYYYYYYYY"
     # fetch from music.apple.com
