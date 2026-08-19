@@ -30,6 +30,11 @@ def _collect_garbage_after_each_test():
     Collecting at the end of every test makes the attribution deterministic.
     Measured on this suite: a leak in an early test is reported against that
     test, and without this fixture it is reported against a later, unrelated one.
+
+    Generation 1, not a full collect. Anything a single test leaks was allocated
+    during that test and has not survived long enough to reach the oldest
+    generation, so gen 1 finds it. A full collect also works but walks the entire
+    heap 511 times, which measured at 11 seconds — it doubled the suite.
     """
     yield
-    gc.collect()
+    gc.collect(1)

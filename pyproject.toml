@@ -114,8 +114,9 @@ include = ["src", "tests", "scripts"]
 extraPaths = ["src"]
 venvPath = "."
 venv = ".venv"
-# Matches .python-version, which is the single interpreter pin. A looser value
-# here would let pyright check against a version the project cannot run on.
+# A language-level setting, not an interpreter pin: it selects which syntax and
+# stdlib surface pyright checks against, and takes major.minor. .python-version
+# pins the actual interpreter at 3.14.7; this only has to agree on the minor.
 pythonVersion = "3.14"
 
 [tool.ty.environment]
