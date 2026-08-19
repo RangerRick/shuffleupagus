@@ -4,6 +4,7 @@ import pytest
 
 from shuffleupagus.core.apiresponse import (
     ApiResponseError,
+    api_array,
     api_field,
     api_has,
     api_int,
@@ -182,3 +183,24 @@ def test_api_has_does_not_match_a_string_character():
 
 def test_api_has_finds_a_key_holding_none():
     assert api_has({"a": None}, "a") is True
+
+
+# --- api_array (#59) ---
+
+
+def test_api_array_returns_a_list():
+    assert api_array([1, 2], "things", SERVICE) == [1, 2]
+
+
+@pytest.mark.parametrize("value", [{}, {"a": 1}, "string", 42, None, 3.5, True])
+def test_api_array_rejects_a_non_list(value):
+    with pytest.raises(ApiResponseError, match="not a list"):
+        api_array(value, "things", SERVICE)
+
+
+def test_api_array_names_what_and_the_service():
+    with pytest.raises(ApiResponseError) as excinfo:
+        api_array(42, "artist albums", SERVICE)
+    assert "artist albums" in str(excinfo.value)
+    assert SERVICE in str(excinfo.value)
+    assert "int" in str(excinfo.value)

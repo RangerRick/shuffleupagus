@@ -9,7 +9,7 @@ import spotipy
 from spotipy.oauth2 import SpotifyOAuth
 from urllib3.util.retry import Retry
 
-from ...core.apiresponse import api_has, api_int, api_list, api_object, api_str
+from ...core.apiresponse import api_array, api_has, api_int, api_list, api_object, api_str
 from ...core.model import Album, Artist, Service, Track
 from ...core.util import logger, parse_retry_after
 from .model import SpotifyAlbum, SpotifyArtist, SpotifyTrack, sanitize_id
@@ -206,7 +206,9 @@ class SpotifyService(Service):
 
         albums = []
         if ret:
-            for album in ret:
+            # Checked after the branches merge, not inside the fetch branch: ret
+            # can also come from the cache, which holds the same untrusted JSON.
+            for album in api_array(ret, "artist albums", _SERVICE_LABEL):
                 albums.append(SpotifyAlbum.from_dict(api_object(album, "items[] entry", _SERVICE_LABEL)))
 
         return albums
@@ -223,7 +225,9 @@ class SpotifyService(Service):
 
         tracks: list[Track] = []
         if ret:
-            for track in ret:
+            # See get_artist_albums: ret can be a cache hit, so the container is
+            # checked here rather than only on the fetch branch.
+            for track in api_array(ret, "album tracks", _SERVICE_LABEL):
                 track = api_object(track, "items[] entry", _SERVICE_LABEL)
                 isrc = None
                 if api_has(track.get("external_ids"), "isrc"):

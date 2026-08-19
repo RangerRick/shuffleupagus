@@ -75,6 +75,20 @@ def api_object(value: object, what: str, service: str) -> dict:
     return value
 
 
+def api_array(value: object, what: str, service: str) -> list:
+    """Return a value that must be a list, naming what it was instead.
+
+    The list counterpart of api_object: it takes the value rather than a path,
+    for checking a container that did not arrive by one — most often a cached
+    response, which is the same untrusted JSON as the HTTP body it came from.
+    Iterating one of those unchecked is how a scalar becomes a TypeError and a
+    dict silently iterates its keys.
+    """
+    if not isinstance(value, list):
+        raise ApiResponseError(f"{service} response {what} is not a list: {type(value).__name__}")
+    return value
+
+
 def api_list(payload: object, path: Sequence[str], service: str) -> list:
     """Return a field that must be a list, or raise naming what it held instead."""
     value = api_field(payload, path, service)

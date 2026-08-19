@@ -1426,3 +1426,12 @@ def test_malformed_response_names_the_service(svc):
     album = MagicMock(id="alb1", name="Album")
     with pytest.raises(ApiResponseError, match="YouTube"):
         svc.get_album_tracks(album)
+
+
+@pytest.mark.parametrize("cached", [42, "a string", {"not": "a list"}])
+def test_get_artist_albums_rejects_a_non_list_cache_hit(svc, cached):
+    """A cache hit is the same untrusted JSON as the response it came from."""
+    artist = YoutubeArtist("c1", "Artist")
+    svc.cache.write("artist:" + artist.id + ":albums", cached)
+    with pytest.raises(ApiResponseError, match="not a list"):
+        svc.get_artist_albums(artist)

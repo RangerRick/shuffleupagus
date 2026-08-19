@@ -11,7 +11,7 @@ from ytmusicapi import YTMusic
 from ytmusicapi.auth.oauth import OAuthCredentials, RefreshingToken
 from ytmusicapi.exceptions import YTMusicServerError, YTMusicUserError
 
-from ...core.apiresponse import api_has, api_int, api_list, api_object, api_str
+from ...core.apiresponse import api_array, api_has, api_int, api_list, api_object, api_str
 from ...core.config import get_filepath
 from ...core.model import Album, Artist, Service, Track
 from ...core.util import logger
@@ -469,7 +469,9 @@ class YoutubeService(Service):
                 self.cache.write(fp_key, api_str(first, ("browseId",), _SERVICE_LABEL), ttl=_FINGERPRINT_TTL)
 
         if ret:
-            for album in ret:
+            # Checked after the branches merge: ret is either a cache hit, a
+            # get_artist_albums response, or the inline albums off the artist.
+            for album in api_array(ret, "artist albums", _SERVICE_LABEL):
                 albums.append(YoutubeAlbum.from_dict(album))
 
         return albums

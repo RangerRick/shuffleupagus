@@ -782,3 +782,20 @@ def test_malformed_response_names_the_service(svc):
     album = MagicMock(id="alb1", name="Album")
     with pytest.raises(ApiResponseError, match="Spotify"):
         svc.get_album_tracks(album)
+
+
+@pytest.mark.parametrize("cached", [42, "a string", {"not": "a list"}])
+def test_get_artist_albums_rejects_a_non_list_cache_hit(svc, cached):
+    """A cache hit is the same untrusted JSON as the response it came from."""
+    artist = MagicMock(id="a1", name="Artist")
+    svc.cache.write("artist:a1:albums", cached)
+    with pytest.raises(ApiResponseError, match="not a list"):
+        svc.get_artist_albums(artist)
+
+
+@pytest.mark.parametrize("cached", [42, "a string", {"not": "a list"}])
+def test_get_album_tracks_rejects_a_non_list_cache_hit(svc, cached):
+    album = MagicMock(id="alb1", name="Album")
+    svc.cache.write("album:alb1:tracks", cached)
+    with pytest.raises(ApiResponseError, match="not a list"):
+        svc.get_album_tracks(album)
