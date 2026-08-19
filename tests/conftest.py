@@ -31,10 +31,30 @@ def _collect_garbage_after_each_test():
     Measured on this suite: a leak in an early test is reported against that
     test, and without this fixture it is reported against a later, unrelated one.
 
-    Generation 1, not a full collect. Anything a single test leaks was allocated
-    during that test and has not survived long enough to reach the oldest
-    generation, so gen 1 finds it. A full collect also works but walks the entire
-    heap 511 times, which measured at 11 seconds — it doubled the suite.
+    A full collect, not a partial one. CPython promotes by surviving collections
+    rather than by elapsed time, so an allocation-heavy test can push its own
+    leaked objects into the oldest generation before it finishes — measured at
+    roughly 25,000 allocations, which a Hypothesis property test passes easily.
+    A gen-1 collect would miss exactly those, and the property tests are where
+    sprint #44's leak actually was.
+
+    Full collects are affordable here because _freeze_startup_heap has already
+    moved everything that existed at import time into the permanent generation,
+    so each collect walks only what the tests themselves created.
     """
     yield
-    gc.collect(1)
+    gc.collect()
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _freeze_startup_heap():
+    """Exclude the import-time heap from every per-test collection.
+
+    Without this, the per-test full collect walks ~10,000 interpreter and import
+    objects that can never be a test's leak, once per test. gc.freeze() moves
+    them into the permanent generation, which is not collected.
+    """
+    gc.collect()
+    gc.freeze()
+    yield
+    gc.unfreeze()
