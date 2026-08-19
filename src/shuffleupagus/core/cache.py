@@ -8,6 +8,10 @@ from typing import Self
 
 CACHE_DEFAULT_CUTOFF = 60 * 60 * 24 * 7 * 1.0  # 1 week
 
+# Absent on platforms without symlinks (Windows). Zero is a no-op in the flag
+# set, so the open still works and _prepare_file falls back to an islink check.
+_O_NOFOLLOW = getattr(os, "O_NOFOLLOW", 0)
+
 
 class CacheClosedError(RuntimeError):
     """A closed Cache was used.
@@ -131,11 +135,21 @@ class Cache:
         access afterwards, so the file is created at the right mode instead of
         being narrowed after the fact.
 
-        O_NOFOLLOW refuses a symlink for the same reason _prepare_dir does.
+        O_NOFOLLOW refuses a symlink for the same reason _prepare_dir does, and
+        it does so atomically — unlike an islink() check, nothing can swap the
+        path between the test and the open. It is absent on some platforms
+        (Windows), where the islink() check below stands in: weaker, because it
+        is racy, but a great deal better than following the link. Reaching for
+        the flag unconditionally would raise AttributeError, which the
+        (OSError, sqlite3.Error) guard in __init__ does not catch, so the run
+        would abort where it should have degraded.
+
         O_CREAT applies the mode only when it actually creates the file, so a
         database left world-readable by an older version is narrowed below.
         """
-        fd = os.open(path, os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, self._FILE_MODE)
+        if not _O_NOFOLLOW and os.path.islink(path):
+            raise OSError(f"cache database {path} is a symlink; refusing to write through it")
+        fd = os.open(path, os.O_CREAT | os.O_RDWR | _O_NOFOLLOW, self._FILE_MODE)
         os.close(fd)
         if stat.S_IMODE(os.stat(path).st_mode) & 0o077:
             os.chmod(path, self._FILE_MODE)

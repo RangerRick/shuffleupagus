@@ -836,3 +836,39 @@ def test_creating_a_new_directory_is_not_announced(tmp_path, monkeypatch, capsys
     with Cache("test"):
         pass
     assert "tightened" not in capsys.readouterr().out
+
+
+def test_a_symlinked_database_is_refused_without_o_nofollow(tmp_path, monkeypatch):
+    """The fallback for a platform where os.O_NOFOLLOW does not exist.
+
+    Racier than the flag, which refuses the symlink atomically, but it keeps the
+    protection rather than quietly dropping it where the flag is unavailable.
+    """
+    import shuffleupagus.core.cache as cache_mod
+
+    monkeypatch.setattr(cache_mod, "_O_NOFOLLOW", 0)
+    victim = tmp_path / "victim.txt"
+    victim.write_text("not a database")
+    victim.chmod(0o644)
+    cachedir = tmp_path / "cachedir"
+    cachedir.mkdir(mode=0o700)
+    link = cachedir / "test.db"
+    link.symlink_to(victim)
+    monkeypatch.setattr(Cache, "_db_path", lambda self: str(link))
+
+    cache = Cache("test")
+    assert cache.read("k") is None
+    assert _mode(victim) == 0o644
+
+
+def test_a_normal_database_still_opens_without_o_nofollow(tmp_path, monkeypatch):
+    """Dropping the flag must not break the ordinary path."""
+    import shuffleupagus.core.cache as cache_mod
+
+    monkeypatch.setattr(cache_mod, "_O_NOFOLLOW", 0)
+    db = tmp_path / "cachedir" / "test.db"
+    monkeypatch.setattr(Cache, "_db_path", lambda self: str(db))
+    with Cache("test") as c:
+        c.write("k", {"a": 1})
+        assert c.read("k") == {"a": 1}
+    assert _mode(db) & 0o077 == 0
