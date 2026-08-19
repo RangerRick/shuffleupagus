@@ -20,7 +20,11 @@ def contained_path(root: Path, name: str) -> str:
     """
     resolved = (root / name).resolve()
     if not resolved.is_relative_to(root.resolve()):
-        raise ValueError(f"Path traversal detected: {name!r}")
+        # The root is named because the likeliest way to see this is a config
+        # value holding an absolute path, which os.path.join used to accept
+        # silently. "Path traversal detected" on its own reads as an accusation
+        # and does not say where the file was expected to be.
+        raise ValueError(f"Path traversal detected: {name!r} is not inside {root}")
     return str(resolved)
 
 

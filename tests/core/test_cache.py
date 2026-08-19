@@ -1,4 +1,5 @@
 import os
+import re
 import sqlite3
 import stat
 import threading
@@ -923,15 +924,13 @@ def test_the_names_actually_in_use_are_accepted(cache_root, name):
 )
 @pytest.mark.usefixtures("cache_root")
 def test_a_name_that_leaves_the_cache_root_is_refused(name):
-    """Escaping the root is the whole point: _prepare_dir chmods what it creates."""
-    with pytest.raises(ValueError, match="Path traversal"):
+    """Escaping the root is the whole point: _prepare_dir chmods what it creates.
+
+    The message has to carry the offending value, so that is asserted here for
+    every case rather than in a second test that re-runs one of them.
+    """
+    with pytest.raises(ValueError, match=rf"Path traversal.*{re.escape(repr(name + '.db'))}"):
         _named(name)._db_path()
-
-
-@pytest.mark.usefixtures("cache_root")
-def test_the_refusal_names_the_offending_value():
-    with pytest.raises(ValueError, match=r"'\.\./escape\.db'"):
-        _named("../escape")._db_path()
 
 
 def test_a_bare_dot_name_is_contained_rather_than_refused(cache_root):
