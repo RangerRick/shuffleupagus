@@ -3,6 +3,7 @@
 import time
 from unittest.mock import MagicMock, patch
 
+import applescript
 import pytest
 import requests
 
@@ -713,6 +714,66 @@ def test_clear_playlist_polls_until_zero(svc):
 
     # Count script polled 3 times: 100, 50, 0
     assert scripts[1].run.call_count == 3
+
+
+def _script_error(number, message="AppleScript failed"):
+    return applescript.ScriptError({"NSAppleScriptErrorNumber": number, "NSAppleScriptErrorMessage": message})
+
+
+def test_clear_playlist_denied_automation_names_the_setting(svc):
+    """errAEEventNotPermitted is the common first-run failure and needs a pointer."""
+    err = _script_error(-1743, "Not authorized to send Apple events to Music.")
+    with (
+        patch(
+            "shuffleupagus.services.appleMusic.service.applescript.AppleScript",
+            side_effect=lambda *_a, **_k: MagicMock(run=MagicMock(side_effect=err)),
+        ),
+        pytest.raises(RuntimeError) as caught,
+    ):
+        svc._AppleMusicService__clear_playlist("My Mix")
+    message = str(caught.value)
+    assert "My Mix" in message
+    assert "Automation" in message
+    assert "Privacy" in message
+
+
+def test_clear_playlist_missing_playlist_does_not_blame_permissions(svc):
+    """A -1728 is a missing playlist, so the Automation advice would be misleading."""
+    err = _script_error(-1728, 'Can\'t get playlist "Ghost".')
+    with (
+        patch(
+            "shuffleupagus.services.appleMusic.service.applescript.AppleScript",
+            side_effect=lambda *_a, **_k: MagicMock(run=MagicMock(side_effect=err)),
+        ),
+        pytest.raises(RuntimeError) as caught,
+    ):
+        svc._AppleMusicService__clear_playlist("Ghost")
+    message = str(caught.value)
+    assert "Ghost" in message
+    assert "Automation" not in message
+
+
+def test_clear_playlist_count_script_failure_is_also_reported(svc):
+    """The delete can succeed and the count script still fail."""
+    scripts = []
+
+    def make_script(*_a, **_k):
+        mock = MagicMock()
+        scripts.append(mock)
+        if len(scripts) == 1:
+            mock.run.return_value = None
+        else:
+            mock.run.side_effect = _script_error(-1743, "Not authorized.")
+        return mock
+
+    with (
+        patch(
+            "shuffleupagus.services.appleMusic.service.applescript.AppleScript",
+            side_effect=make_script,
+        ),
+        pytest.raises(RuntimeError, match="Automation"),
+    ):
+        svc._AppleMusicService__clear_playlist("My Mix")
 
 
 def test_clear_playlist_gives_up_when_count_never_drops(svc):

@@ -30,6 +30,31 @@ def _applescript_str(value: str) -> str:
     return value.replace("\\", "\\\\").replace('"', '\\"')
 
 
+# errAEEventNotPermitted. Music.app is scriptable but this process has not been
+# granted Automation access, which is the usual state on a machine that has never
+# run this before.
+_ERR_NOT_PERMITTED = -1743
+
+
+def _run_applescript(script: applescript.AppleScript, doing: str, playlist_name: str) -> object:
+    """Run a script, turning a ScriptError into an actionable RuntimeError.
+
+    py-applescript raises rather than returning a sentinel, and an unhandled
+    ScriptError reaches the user as a traceback naming neither the playlist nor
+    anything they can do about it.
+    """
+    try:
+        return script.run()
+    except applescript.ScriptError as exc:
+        detail = f"AppleScript failed {doing} playlist '{playlist_name}': {exc}"
+        if exc.number == _ERR_NOT_PERMITTED:
+            detail += (
+                ". Allow this program to control Music under System Settings > "
+                "Privacy & Security > Automation, then retry."
+            )
+        raise RuntimeError(detail) from exc
+
+
 def _applescript_count(result: object) -> int:
     """Coerce an AppleScript track count to int.
 
@@ -369,7 +394,7 @@ class AppleMusicService(Service):
             end tell
         """
         )
-        scpt.run()
+        _run_applescript(scpt, "clearing", playlist_name)
 
         logger.info(f"{self.tag}  * waiting for Music.app to process the deletion")
         count_scpt = applescript.AppleScript(
@@ -380,12 +405,12 @@ class AppleMusicService(Service):
             end tell
         """
         )
-        count = _applescript_count(count_scpt.run())
+        count = _applescript_count(_run_applescript(count_scpt, "counting tracks in", playlist_name))
         for _ in range(150):
             if count == 0:
                 break
             time.sleep(2)
-            count = _applescript_count(count_scpt.run())
+            count = _applescript_count(_run_applescript(count_scpt, "counting tracks in", playlist_name))
             logger.info(f"{self.tag}    * {count} track(s) remaining...")
         else:
             raise RuntimeError(
