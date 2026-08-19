@@ -69,10 +69,21 @@ def _require_mapping(value: object, what: str, path: str) -> dict:
     return value
 
 
+def _name(value: object) -> str:
+    """A bounded, escaped form of a key taken from a config file.
+
+    Same reasoning as the YAML parser message in _load_yaml_mapping: a key is
+    file content this program does not control. repr matters more than the
+    length here, because it escapes control characters and terminal escape
+    sequences that would otherwise reach a log verbatim.
+    """
+    return f"{value!r:.60}"
+
+
 def _check_services(services: dict, path: str) -> None:
     """Every service entry must be a mapping of settings."""
     for name, entry in services.items():
-        _require_mapping(entry, f"service '{name}'", path)
+        _require_mapping(entry, f"service {_name(name)}", path)
 
 
 def _check_artists(artists: dict, path: str) -> None:
@@ -86,24 +97,24 @@ def _check_artists(artists: dict, path: str) -> None:
     for name, entry in artists.items():
         if entry is None:
             continue
-        artist = _require_mapping(entry, f"artist '{name}'", path)
+        artist = _require_mapping(entry, f"artist {_name(name)}", path)
 
         services = artist.get("services")
         if services is not None:
-            _require_mapping(services, f"artist '{name}' services", path)
+            _require_mapping(services, f"artist {_name(name)} services", path)
 
         excludes = artist.get("exclude")
         if excludes is None:
             continue
-        for service_name, rules in _require_mapping(excludes, f"artist '{name}' exclude", path).items():
+        for service_name, rules in _require_mapping(excludes, f"artist {_name(name)} exclude", path).items():
             if rules is None:
                 continue
-            block = _require_mapping(rules, f"artist '{name}' exclude.{service_name}", path)
+            block = _require_mapping(rules, f"artist {_name(name)} exclude.{_name(service_name)}", path)
             for kind in ("albums", "tracks"):
                 listed = block.get(kind)
                 if listed is not None and not isinstance(listed, list):
                     raise RuntimeError(
-                        f"{path}: artist '{name}' exclude.{service_name}.{kind} must be a list, "
+                        f"{path}: artist {_name(name)} exclude.{_name(service_name)}.{kind} must be a list, "
                         f"not a {type(listed).__name__}."
                     )
 

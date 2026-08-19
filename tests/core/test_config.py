@@ -395,3 +395,22 @@ def test_a_valid_config_is_unchanged(tmp_path, monkeypatch):
     assert config.vip_artists("spotify") == ["sid"]
     assert config.excluded_albums("spotify") == ["a1"]
     assert config.excluded_tracks("spotify") == ["t1"]
+
+
+def test_a_malicious_artist_name_is_escaped_in_the_message(tmp_path, monkeypatch):
+    """A key is file content, so it is escaped before it reaches a log.
+
+    A raw name carrying a terminal escape sequence would otherwise be
+    interpreted by whatever renders the message.
+    """
+    _cfg(tmp_path, monkeypatch, {}, {"\x1b[31mred\x1b[0m": "not-a-mapping"})
+    with pytest.raises(RuntimeError) as excinfo:
+        Config()
+    assert "\x1b" not in str(excinfo.value)
+
+
+def test_a_very_long_artist_name_is_truncated(tmp_path, monkeypatch):
+    _cfg(tmp_path, monkeypatch, {}, {"x" * 5000: "not-a-mapping"})
+    with pytest.raises(RuntimeError) as excinfo:
+        Config()
+    assert len(str(excinfo.value)) < 300
