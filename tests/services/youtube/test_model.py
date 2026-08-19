@@ -198,11 +198,11 @@ def test_track_matches_url():
 # --- response shape checks (#59) ---
 
 
-def _artist_payload():
+def _artist_payload() -> dict:
     return {"channelId": "c1", "name": "Artist"}
 
 
-def _album_payload():
+def _album_payload() -> dict:
     return {"browseId": "b1", "title": "Album", "year": "2020"}
 
 

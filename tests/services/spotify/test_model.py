@@ -124,7 +124,7 @@ def test_artist_from_dict_missing_key(missing):
 
 @pytest.mark.parametrize("field", ["id", "name"])
 def test_artist_from_dict_wrong_type(field):
-    obj = {"id": "ar1", "name": "Artist"}
+    obj: dict = {"id": "ar1", "name": "Artist"}
     obj[field] = 42
     with pytest.raises(ApiResponseError, match="not a string"):
         SpotifyArtist.from_dict(obj)
@@ -146,7 +146,7 @@ def test_album_from_dict_missing_key(missing):
 
 @pytest.mark.parametrize("field", ["id", "name", "release_date"])
 def test_album_from_dict_wrong_type(field):
-    obj = {"id": "a1", "name": "Album", "release_date": "2020-01-01"}
+    obj: dict = {"id": "a1", "name": "Album", "release_date": "2020-01-01"}
     obj[field] = {"nested": True}
     with pytest.raises(ApiResponseError, match="not a string"):
         SpotifyAlbum.from_dict(obj)
