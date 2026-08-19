@@ -281,3 +281,19 @@ def test_missing_services_section_names_the_cause(tmp_path, monkeypatch):
 
     with pytest.raises(RuntimeError, match="no 'services:' section"):
         Config()
+
+
+def test_non_utf8_config_is_rejected_under_any_locale(tmp_path, monkeypatch):
+    """The decode must not depend on the shell's LANG.
+
+    latin-1 decodes every byte sequence without error, so under that locale an
+    unreadable file would parse as mojibake instead of raising.
+    """
+    monkeypatch.setenv("LANG", "en_US.ISO8859-1")
+    monkeypatch.setenv("LC_ALL", "en_US.ISO8859-1")
+    cfg_dir = _configure_paths(tmp_path, monkeypatch)
+    (cfg_dir / "config.yaml").write_bytes(b"services:\n  name: \xff\xfe\xfd\n")
+    (cfg_dir / "artists.yaml").write_text(yaml.dump({}))
+
+    with pytest.raises(RuntimeError, match="UTF-8"):
+        Config()

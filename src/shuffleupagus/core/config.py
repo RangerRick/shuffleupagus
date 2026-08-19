@@ -21,7 +21,11 @@ def _load_yaml_mapping(path: str, empty_ok: bool = False) -> dict:
     the reader can act on. The mark YAML reports is kept, since the line number
     is the one genuinely useful part of it.
     """
-    with open(path) as f:
+    # encoding is explicit: open() otherwise decodes with the locale encoding,
+    # so the same file would be read differently under a different LANG, and
+    # the UnicodeDecodeError below would fire on one machine and not another.
+    # YAML 1.2 files are UTF-8, regardless of what the shell is set to.
+    with open(path, encoding="utf-8") as f:
         try:
             data = yaml.safe_load(f)
         except yaml.YAMLError as exc:
