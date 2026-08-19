@@ -61,8 +61,8 @@ class Cache:
         self._conn: sqlite3.Connection | None = None
         try:
             self._prepare_dir(os.path.dirname(path))
+            self._prepare_file(path)
             self._conn = sqlite3.connect(path, check_same_thread=False)
-            self._restrict(path)
         except (OSError, sqlite3.Error) as exc:
             self._degrade("opening", exc)
             return
@@ -110,16 +110,33 @@ class Cache:
         version that left 0755 behind would otherwise stay exposed forever.
         """
         os.makedirs(directory, mode=self._DIR_MODE, exist_ok=True)
+        # Refused rather than resolved. os.chmod follows symlinks and has no
+        # working follow_symlinks=False on Linux, so a symlinked cache
+        # directory would make this a chmod of whatever it points at.
+        if os.path.islink(directory):
+            raise OSError(f"cache directory {directory} is a symlink; refusing to change its target's permissions")
         if stat.S_IMODE(os.stat(directory).st_mode) & 0o077:
             os.chmod(directory, self._DIR_MODE)
+            # Said out loud: this also reverts a mode the user may have chosen
+            # on purpose, and it would do so again on every run. Silently
+            # undoing someone's decision leaves them nothing to respond to.
+            print(f"* tightened {directory} to {self._DIR_MODE:o}", flush=True)
 
-    def _restrict(self, path: str) -> None:
-        """Take group and other off the database file.
+    def _prepare_file(self, path: str) -> None:
+        """Make sure the database exists at the right mode before sqlite opens it.
 
-        Defence in depth behind the directory mode. sqlite creates the file
-        under the process umask, which on a default umask of 022 leaves it
-        world-readable.
+        sqlite creates the file under the process umask, which on a default
+        umask of 022 leaves it world-readable from the moment connect() returns
+        until a chmod lands. A descriptor opened in that window keeps its
+        access afterwards, so the file is created at the right mode instead of
+        being narrowed after the fact.
+
+        O_NOFOLLOW refuses a symlink for the same reason _prepare_dir does.
+        O_CREAT applies the mode only when it actually creates the file, so a
+        database left world-readable by an older version is narrowed below.
         """
+        fd = os.open(path, os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, self._FILE_MODE)
+        os.close(fd)
         if stat.S_IMODE(os.stat(path).st_mode) & 0o077:
             os.chmod(path, self._FILE_MODE)
 

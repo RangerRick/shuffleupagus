@@ -765,3 +765,74 @@ def test_a_failed_rate_limit_delete_is_harmless(tmp_path, monkeypatch):
         assert c.delete("rate_limit_until") is False
         # The row is still there, and still reads as expired.
         assert c.read_stale("rate_limit_until") is None
+
+
+# --- permission hardening from review (#71 follow-up) ---
+
+
+def test_the_database_is_never_world_readable_even_briefly(tmp_path, monkeypatch):
+    """sqlite created the file at the umask mode, then we narrowed it.
+
+    Between those two the file was readable, and a descriptor opened in that
+    window keeps its access after the chmod. The file is now created at the
+    right mode instead.
+    """
+    db = tmp_path / "cachedir" / "test.db"
+    monkeypatch.setattr(Cache, "_db_path", lambda self: str(db))
+    seen = []
+    real_connect = sqlite3.connect
+
+    def _spy(path, *a, **k):
+        seen.append(_mode(path))
+        return real_connect(path, *a, **k)
+
+    monkeypatch.setattr(sqlite3, "connect", _spy)
+    with Cache("test"):
+        pass
+    assert seen, "sqlite3.connect was never called"
+    assert all(m & 0o077 == 0 for m in seen), seen
+
+
+def test_a_symlinked_cache_directory_is_refused(tmp_path, monkeypatch, capsys):
+    """chmod follows symlinks, so this was a chmod primitive on any directory."""
+    victim = tmp_path / "victim"
+    victim.mkdir(mode=0o755)
+    link = tmp_path / "cachedir"
+    link.symlink_to(victim, target_is_directory=True)
+    monkeypatch.setattr(Cache, "_db_path", lambda self: str(link / "test.db"))
+    cache = Cache("test")
+    assert cache.read("k") is None
+    assert _mode(victim) == 0o755
+    assert "unusable" in capsys.readouterr().out
+
+
+def test_a_symlinked_database_is_refused(tmp_path, monkeypatch):
+    victim = tmp_path / "victim.txt"
+    victim.write_text("not a database")
+    victim.chmod(0o644)
+    cachedir = tmp_path / "cachedir"
+    cachedir.mkdir(mode=0o700)
+    link = cachedir / "test.db"
+    link.symlink_to(victim)
+    monkeypatch.setattr(Cache, "_db_path", lambda self: str(link))
+    cache = Cache("test")
+    assert cache.read("k") is None
+    assert _mode(victim) == 0o644
+
+
+def test_tightening_an_existing_directory_is_announced(tmp_path, monkeypatch, capsys):
+    """Silently reverting a mode the user chose leaves them no way to respond."""
+    cachedir = tmp_path / "cachedir"
+    cachedir.mkdir(mode=0o755)
+    monkeypatch.setattr(Cache, "_db_path", lambda self: str(cachedir / "test.db"))
+    with Cache("test"):
+        pass
+    assert "tightened" in capsys.readouterr().out
+
+
+def test_creating_a_new_directory_is_not_announced(tmp_path, monkeypatch, capsys):
+    db = tmp_path / "fresh" / "test.db"
+    monkeypatch.setattr(Cache, "_db_path", lambda self: str(db))
+    with Cache("test"):
+        pass
+    assert "tightened" not in capsys.readouterr().out
