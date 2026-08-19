@@ -230,3 +230,44 @@ def test_empty_artist_file_is_an_empty_mapping(tmp_path, monkeypatch):
     (cfg_dir / "artists.yaml").write_text("")
 
     assert Config().artists() == {}
+
+
+def test_non_utf8_config_names_the_file(tmp_path, monkeypatch):
+    cfg_dir = _configure_paths(tmp_path, monkeypatch)
+    (cfg_dir / "config.yaml").write_bytes(b"services:\n  name: \xff\xfe\xfd\n")
+    (cfg_dir / "artists.yaml").write_text(yaml.dump({}))
+
+    with pytest.raises(RuntimeError) as excinfo:
+        Config()
+    assert "config.yaml" in str(excinfo.value)
+    assert "UTF-8" in str(excinfo.value)
+
+
+def test_non_utf8_config_does_not_leak_a_unicode_error(tmp_path, monkeypatch):
+    cfg_dir = _configure_paths(tmp_path, monkeypatch)
+    (cfg_dir / "config.yaml").write_bytes(b"\xff\xfe\x00\x01binary")
+    (cfg_dir / "artists.yaml").write_text(yaml.dump({}))
+
+    with pytest.raises(RuntimeError) as excinfo:
+        Config()
+    assert not isinstance(excinfo.value, UnicodeDecodeError)
+
+
+def test_yaml_error_message_is_bounded(tmp_path, monkeypatch):
+    """The parser quotes the offending line, which is untrusted file content."""
+    cfg_dir = _configure_paths(tmp_path, monkeypatch)
+    (cfg_dir / "config.yaml").write_text("services: [" + "x" * 5000 + "\n")
+    (cfg_dir / "artists.yaml").write_text(yaml.dump({}))
+
+    with pytest.raises(RuntimeError) as excinfo:
+        Config()
+    assert len(str(excinfo.value)) < 400
+
+
+def test_services_must_be_a_mapping(tmp_path, monkeypatch):
+    cfg_dir = _configure_paths(tmp_path, monkeypatch)
+    (cfg_dir / "config.yaml").write_text(yaml.dump({"services": ["a", "b"]}))
+    (cfg_dir / "artists.yaml").write_text(yaml.dump({}))
+
+    with pytest.raises(RuntimeError, match="services"):
+        Config()

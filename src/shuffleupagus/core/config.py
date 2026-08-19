@@ -27,8 +27,16 @@ def _load_yaml_mapping(path: str, empty_ok: bool = False) -> dict:
         except yaml.YAMLError as exc:
             mark = getattr(exc, "problem_mark", None)
             where = f" at line {mark.line + 1}, column {mark.column + 1}" if mark else ""
+            # Truncated: the parser quotes the offending line back, and that
+            # line is file content this program does not control.
             problem = getattr(exc, "problem", None) or "could not be parsed"
-            raise RuntimeError(f"{path} is not valid YAML{where}: {problem}. Fix the syntax and retry.") from exc
+            raise RuntimeError(f"{path} is not valid YAML{where}: {problem!r:.60}. Fix the syntax and retry.") from exc
+        except UnicodeDecodeError as exc:
+            # Not a YAMLError: the decode fails before the parser sees anything.
+            raise RuntimeError(
+                f"{path} is not valid UTF-8 text at byte {exc.start}. "
+                "Re-save it as UTF-8, or delete it to start from the defaults."
+            ) from exc
 
     if data is None:
         if empty_ok:
