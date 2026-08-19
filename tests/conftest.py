@@ -1,3 +1,6 @@
+import gc
+
+import pytest
 from hypothesis import settings
 
 # Hypothesis' default 200ms per-example deadline is a wall-clock measurement, and
@@ -13,3 +16,20 @@ from hypothesis import settings
 # should still fail.
 settings.register_profile("default", deadline=None)
 settings.load_profile("default")
+
+
+@pytest.fixture(autouse=True)
+def _collect_garbage_after_each_test():
+    """Attribute a leaked resource to the test that leaked it.
+
+    A ResourceWarning from a finalizer is unraisable, so pytest blames whichever
+    test happened to be running when the collector fired — usually not the one
+    that leaked. Sprint #44 hit this: an unclosed cache in the YouTube tests
+    failed a test under tests/services/spotify/.
+
+    Collecting at the end of every test makes the attribution deterministic.
+    Measured on this suite: a leak in an early test is reported against that
+    test, and without this fixture it is reported against a later, unrelated one.
+    """
+    yield
+    gc.collect()

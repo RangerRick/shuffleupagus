@@ -115,7 +115,18 @@ error-on-warning = true
 addopts = "--cov=src --cov-report=term-missing"
 testpaths = ["tests"]
 pythonpath = ["src"]
-filterwarnings = ["error"]
+filterwarnings = [
+  "error",
+  # A deprecation raised inside a dependency is not this project's failure, and
+  # with warnings-as-errors an upstream release would otherwise leave the repo
+  # unmergeable until someone else fixed it. Scoped to the category and the
+  # module: a DeprecationWarning raised by our own code still fails the run.
+  "ignore::DeprecationWarning:ytmusicapi.*",
+  "ignore::DeprecationWarning:spotipy.*",
+  "ignore::DeprecationWarning:applemusicpy.*",
+  "ignore::DeprecationWarning:requests.*",
+  "ignore::DeprecationWarning:urllib3.*",
+]
 
 [tool.coverage.report]
 fail_under = 80
