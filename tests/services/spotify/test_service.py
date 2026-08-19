@@ -7,6 +7,7 @@ from unittest.mock import MagicMock
 import pytest
 import spotipy
 
+from shuffleupagus.core.apiresponse import ApiResponseError
 from shuffleupagus.core.cache import Cache
 from shuffleupagus.core.model import Album, Artist, Service
 from shuffleupagus.services.spotify.service import (
@@ -726,3 +727,58 @@ def test_sync_with_none_tracks(svc):
     svc.sync("P", None)
     svc.spotify.playlist_replace_items.assert_called_once_with("pl1", [])
     svc.spotify.playlist_add_items.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# Malformed responses (#59)
+# ---------------------------------------------------------------------------
+
+
+def test_get_album_tracks_rejects_a_non_list_items(svc):
+    svc.spotify.album_tracks.return_value = {"items": {"not": "a list"}}
+    album = MagicMock(id="alb1", name="Album")
+    with pytest.raises(ApiResponseError, match="items is not a list"):
+        svc.get_album_tracks(album)
+
+
+def test_get_album_tracks_rejects_a_non_object_entry(svc):
+    svc.spotify.album_tracks.return_value = {"items": ["oops"]}
+    album = MagicMock(id="alb1", name="Album")
+    with pytest.raises(ApiResponseError, match="not an object"):
+        svc.get_album_tracks(album)
+
+
+def test_get_album_tracks_rejects_a_missing_track_id(svc):
+    svc.spotify.album_tracks.return_value = {"items": [{"name": "T", "duration_ms": 100, "artists": []}]}
+    album = MagicMock(id="alb1", name="Album")
+    with pytest.raises(ApiResponseError, match="id is missing"):
+        svc.get_album_tracks(album)
+
+
+def test_get_album_tracks_rejects_a_non_numeric_duration(svc):
+    svc.spotify.album_tracks.return_value = {
+        "items": [{"id": "t1", "name": "T", "duration_ms": {"ms": 1}, "artists": []}]
+    }
+    album = MagicMock(id="alb1", name="Album")
+    with pytest.raises(ApiResponseError, match="not a number"):
+        svc.get_album_tracks(album)
+
+
+def test_get_artist_top_tracks_rejects_a_non_list_tracks(svc):
+    svc.spotify.artist_top_tracks.return_value = {"tracks": "nope"}
+    artist = MagicMock(id="a1", name="Artist")
+    with pytest.raises(ApiResponseError, match="tracks is not a list"):
+        svc.get_artist_top_tracks(artist)
+
+
+def test_get_artist_top_tracks_missing_tracks_is_empty(svc):
+    svc.spotify.artist_top_tracks.return_value = {"other": []}
+    artist = MagicMock(id="a1", name="Artist")
+    assert svc.get_artist_top_tracks(artist) == []
+
+
+def test_malformed_response_names_the_service(svc):
+    svc.spotify.album_tracks.return_value = {"items": ["oops"]}
+    album = MagicMock(id="alb1", name="Album")
+    with pytest.raises(ApiResponseError, match="Spotify"):
+        svc.get_album_tracks(album)

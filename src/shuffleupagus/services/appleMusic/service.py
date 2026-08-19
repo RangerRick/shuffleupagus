@@ -151,8 +151,10 @@ class AppleMusicService(Service):
                 self._reraise_if_fatal(e, "artist")
                 logger.error(f"{self.tag}  ! error fetching artist: {e}")
 
-        if ret is not None and ret["data"] and len(ret["data"]) > 0:
-            return AppleMusicArtist.from_dict(ret["data"][0])
+        if ret is not None:
+            data = api_list(ret, ("data",), _SERVICE_LABEL)
+            if data:
+                return AppleMusicArtist.from_dict(api_object(data[0], "data[0]", _SERVICE_LABEL))
 
         return None
 
@@ -172,8 +174,10 @@ class AppleMusicService(Service):
                 self._reraise_if_fatal(e, "album")
                 logger.error(f"{self.tag}  ! error fetching album: {e}")
 
-        if ret is not None and ret["data"] and len(ret["data"]) > 0:
-            return AppleMusicAlbum.from_dict(ret["data"][0])
+        if ret is not None:
+            data = api_list(ret, ("data",), _SERVICE_LABEL)
+            if data:
+                return AppleMusicAlbum.from_dict(api_object(data[0], "data[0]", _SERVICE_LABEL))
 
         return None
 
@@ -192,12 +196,18 @@ class AppleMusicService(Service):
                 self._reraise_if_fatal(e, "artist albums")
                 logger.warning(f"{self.tag}  ! error fetching albums for {artist.name} ({artist.id}): {e}")
 
-        if ret is None or "data" not in ret or len(ret["data"]) == 0:
+        # A response with no "data" at all means the artist has no albums, which
+        # is why this answers [] rather than raising. A "data" that is present
+        # but is not a list of objects is a different thing, and does raise.
+        if ret is None:
+            return []
+        ret = api_object(ret, "response", _SERVICE_LABEL)
+        if "data" not in ret:
             return []
 
         albums = []
-        for album in ret["data"] or []:
-            albums.append(AppleMusicAlbum.from_dict(album))
+        for album in api_list(ret, ("data",), _SERVICE_LABEL):
+            albums.append(AppleMusicAlbum.from_dict(api_object(album, "data[] entry", _SERVICE_LABEL)))
         return albums
 
     def _get_track_by_id(self, track_id: str) -> Track | None:
@@ -215,19 +225,32 @@ class AppleMusicService(Service):
                 self._reraise_if_fatal(e, "track")
                 logger.error(f"{self.tag}  ! error fetching track: {e}")
 
-        if ret is not None and ret["data"] and len(ret["data"]) > 0:
-            track_obj = ret["data"][0]
+        if ret is not None:
+            data = api_list(ret, ("data",), _SERVICE_LABEL)
+            if not data:
+                return None
+            track_obj = api_object(data[0], "data[0]", _SERVICE_LABEL)
             artists = []
             album = None
 
-            if "relationships" in track_obj:
-                if "artists" in track_obj["relationships"]:
-                    for artist in track_obj["relationships"]["artists"]["data"]:
-                        resolved_artist = self.get_artist(artist["id"])
-                        if resolved_artist is not None:
-                            artists.append(resolved_artist)
-                if "albums" in track_obj["relationships"]:
-                    album = self.get_album_by_id(track_obj["relationships"]["albums"]["data"][0]["id"])
+            # "relationships" and the two sections under it are all optional:
+            # they are present only when the request asked to include them.
+            relationships = (
+                api_object(track_obj["relationships"], "track relationships", _SERVICE_LABEL)
+                if "relationships" in track_obj
+                else {}
+            )
+            if "artists" in relationships:
+                for artist in api_list(relationships, ("artists", "data"), _SERVICE_LABEL):
+                    entry = api_object(artist, "relationships.artists.data[] entry", _SERVICE_LABEL)
+                    resolved_artist = self.get_artist(api_str(entry, ("id",), _SERVICE_LABEL))
+                    if resolved_artist is not None:
+                        artists.append(resolved_artist)
+            if "albums" in relationships:
+                album_data = api_list(relationships, ("albums", "data"), _SERVICE_LABEL)
+                if album_data:
+                    entry = api_object(album_data[0], "relationships.albums.data[0]", _SERVICE_LABEL)
+                    album = self.get_album_by_id(api_str(entry, ("id",), _SERVICE_LABEL))
 
             return AppleMusicTrack.from_dict(track_obj, artists=artists, album=album)
 
@@ -248,7 +271,10 @@ class AppleMusicService(Service):
                 self._reraise_if_fatal(e, "album tracks")
                 logger.error(f"{self.tag}  ! error fetching album tracks: {e}")
 
-        if ret is None or "data" not in ret or len(ret["data"]) == 0:
+        if ret is None:
+            return []
+        ret = api_object(ret, "response", _SERVICE_LABEL)
+        if "data" not in ret:
             return []
 
         artists = []
@@ -256,8 +282,9 @@ class AppleMusicService(Service):
             artists.append(artist)
 
         tracks = []
-        for track in ret["data"] or []:
-            appleMusicTrack = AppleMusicTrack.from_dict(track, album=album, artists=artists)
+        for track in api_list(ret, ("data",), _SERVICE_LABEL):
+            entry = api_object(track, "data[] entry", _SERVICE_LABEL)
+            appleMusicTrack = AppleMusicTrack.from_dict(entry, album=album, artists=artists)
             tracks.append(appleMusicTrack)
 
         return tracks
@@ -294,12 +321,16 @@ class AppleMusicService(Service):
                 self._reraise_if_fatal(e, "top tracks")
                 logger.error(f"{self.tag}  ! error fetching top tracks: {e}")
 
-        if ret is None or "data" not in ret or len(ret["data"]) == 0:
+        if ret is None:
+            return []
+        ret = api_object(ret, "response", _SERVICE_LABEL)
+        if "data" not in ret:
             return []
 
         tracks = []
-        for track in ret["data"] or []:
-            resolved = self._get_track_by_id(track["id"])
+        for track in api_list(ret, ("data",), _SERVICE_LABEL):
+            entry = api_object(track, "data[] entry", _SERVICE_LABEL)
+            resolved = self._get_track_by_id(api_str(entry, ("id",), _SERVICE_LABEL))
             if resolved is not None:
                 tracks.append(resolved)
         return tracks
@@ -322,9 +353,10 @@ class AppleMusicService(Service):
             if r.status_code >= 200 and r.status_code < 300:
                 return api_int(r.json(), ("meta", "total"), _SERVICE_LABEL)
             # instead of returning 0 values, the API throws a 404 with a "No related resources" error
-            if r.json()["errors"] and len(r.json()["errors"]) > 0:
-                if "code" in r.json()["errors"][0] and r.json()["errors"][0]["code"] == "40403":
-                    return 0
+            body = r.json()
+            errors = api_list(body, ("errors",), _SERVICE_LABEL) if isinstance(body, dict) and "errors" in body else []
+            if errors and api_object(errors[0], "errors[0]", _SERVICE_LABEL).get("code") == "40403":
+                return 0
 
             logger.error(f"{self.tag}  ! error fetching playlist: {r.status_code} {r.reason}")
             if len(r.text.strip()) > 0:

@@ -81,3 +81,14 @@ def api_list(payload: object, path: Sequence[str], service: str) -> list:
     if not isinstance(value, list):
         raise ApiResponseError(f"{_describe(service, path)} is not a list: {type(value).__name__}")
     return value
+
+
+def api_has(payload: object, key: str) -> bool:
+    """Return whether an optional field is present on an object response.
+
+    `key in payload` is not a safe test on its own: it raises TypeError when the
+    payload is not a container, and answers on characters when it is a string.
+    Both are the raw failure these helpers exist to replace, so a payload that
+    is not an object simply has no fields.
+    """
+    return isinstance(payload, dict) and key in payload

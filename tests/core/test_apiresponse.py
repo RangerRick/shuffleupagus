@@ -2,7 +2,15 @@
 
 import pytest
 
-from shuffleupagus.core.apiresponse import ApiResponseError, api_field, api_int, api_list, api_object, api_str
+from shuffleupagus.core.apiresponse import (
+    ApiResponseError,
+    api_field,
+    api_has,
+    api_int,
+    api_list,
+    api_object,
+    api_str,
+)
 
 SERVICE = "Apple Music"
 
@@ -149,3 +157,28 @@ def test_str_rejects_non_strings(value):
     """str() would turn a dict into an identifier-shaped string and pass it to a URL."""
     with pytest.raises(ApiResponseError, match="not a string"):
         api_str({"id": value}, ("id",), SERVICE)
+
+
+# --- api_has (#59) ---
+
+
+def test_api_has_finds_a_present_key():
+    assert api_has({"a": 1}, "a") is True
+
+
+def test_api_has_rejects_an_absent_key():
+    assert api_has({"a": 1}, "b") is False
+
+
+@pytest.mark.parametrize("payload", [[], ["a"], "a", 42, None, 3.5, True])
+def test_api_has_is_false_for_a_non_object(payload):
+    assert api_has(payload, "a") is False
+
+
+def test_api_has_does_not_match_a_string_character():
+    """`"a" in "abc"` is True; a string response has no fields."""
+    assert api_has("abc", "a") is False
+
+
+def test_api_has_finds_a_key_holding_none():
+    assert api_has({"a": None}, "a") is True
