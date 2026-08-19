@@ -149,7 +149,9 @@ class AppleMusicService(Service):
         response = getattr(e, "response", None)
         status = getattr(response, "status_code", None)
         if status == 404:
-            logger.info(f"{self.tag}  * no {what} for {which} on Apple Music, skipping")
+            # Bounded and escaped on this path too, not just the raise below:
+            # `which` is the same API-derived value either way.
+            logger.info(f"{self.tag}  * no {what} for {which!r:.120} on Apple Music, skipping")
             return
         detail = f" ({status})" if status is not None else ""
         # `which` is built from API response data at half these call sites, so
@@ -335,6 +337,13 @@ class AppleMusicService(Service):
                 )
 
         if fatal_error is not None:
+            # Drop whatever has not started yet. We are aborting because the
+            # service told us to stop — often a rate limit — so letting queued
+            # work carry on calling the same API is both pointless and rude.
+            # Already-running tasks cannot be interrupted; this is the same
+            # guarantee Service._shutdown_pools gives.
+            for pending in futures:
+                pending.cancel()
             raise fatal_error
 
         return tracks

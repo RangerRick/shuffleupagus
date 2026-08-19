@@ -10,6 +10,7 @@ the wild carry that attribute in every combination: absent, present but None,
 present but not a number.
 """
 
+import logging
 from unittest.mock import MagicMock
 
 import pytest
@@ -100,3 +101,20 @@ def test_the_message_escapes_what_it_names(which):
     with pytest.raises(RuntimeError) as excinfo:
         _svc()._absent_or_raise(Exception("failed"), "artist", "\x1b[31m" + which)
     assert "\x1b" not in str(excinfo.value)
+
+
+@pytest.mark.parametrize("which", ["\x1b[31mred", "x" * 400, "\r\n\t", "plain"])
+def test_the_absent_log_line_is_also_bounded_and_escaped(which, caplog):
+    """The 404 path logs the same API-derived value the raise path names.
+
+    Not a @given test: caplog is function-scoped, which Hypothesis rejects, and
+    the shapes that matter here are enumerable.
+    """
+    response = MagicMock()
+    response.status_code = 404
+    response.headers = {}
+    exc = requests.exceptions.HTTPError("missing", response=response)
+    with caplog.at_level(logging.INFO):
+        _svc()._absent_or_raise(exc, "artist", which)
+    assert "\x1b" not in caplog.text
+    assert len(caplog.text) < 400
