@@ -281,6 +281,13 @@ class SpotifyService(Service):
                 )
 
         if fatal_error is not None:
+            # Drop whatever has not started yet. We are aborting because the
+            # service told us to stop — often a rate limit — so letting queued
+            # work carry on calling the same API is both pointless and rude.
+            # Already-running tasks cannot be interrupted; this is the same
+            # guarantee Service._shutdown_pools gives.
+            for pending in futures:
+                pending.cancel()
             raise fatal_error
 
         return tracks

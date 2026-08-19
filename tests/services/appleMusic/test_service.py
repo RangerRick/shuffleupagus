@@ -1,5 +1,6 @@
 """Tests for AppleMusicService with all network/applescript calls mocked."""
 
+import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 from unittest.mock import MagicMock, patch
@@ -1169,3 +1170,42 @@ def test_a_fetch_failure_message_is_bounded(svc):
     with pytest.raises(RuntimeError) as excinfo:
         svc.get_artist("x" * 5000)
     assert len(str(excinfo.value)) < 500
+
+
+def test_get_artist_tracks_cancels_queued_work_when_aborting(svc):
+    """Aborting after a rate limit must not leave queued calls hitting the API.
+
+    One worker and six albums: the first raises, the second blocks, and the
+    remaining four are still queued when the abort fires. Those four are the
+    ones cancel() can actually stop, and asserting on them is deterministic —
+    asserting on a call count would race the pool.
+    """
+    albums = [MagicMock(id=f"alb{i}", name=f"Album {i}") for i in range(6)]
+    svc.get_artist_albums = MagicMock(return_value=albums)
+    release = threading.Event()
+
+    def _fetch(album, _artist=None):
+        if album is albums[0]:
+            raise RuntimeError("Apple Music rate-limited")
+        release.wait(timeout=5)
+        return []
+
+    svc.get_album_tracks = MagicMock(side_effect=_fetch)
+
+    submitted = []
+    pool = ThreadPoolExecutor(max_workers=1)
+
+    class _RecordingPool:
+        def submit(self, fn, *args, **kwargs):
+            future = pool.submit(fn, *args, **kwargs)
+            submitted.append(future)
+            return future
+
+    svc._album_pool = _RecordingPool()
+    try:
+        with pytest.raises(RuntimeError, match="rate-limited"):
+            svc.get_artist_tracks(MagicMock(id="a1", name="Artist"))
+        assert any(future.cancelled() for future in submitted), "no queued work was cancelled"
+    finally:
+        release.set()
+        pool.shutdown(wait=True)
