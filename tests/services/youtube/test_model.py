@@ -156,6 +156,38 @@ def test_track_from_dict_invalid_raises():
         YoutubeTrack.from_dict({"unexpected": True})
 
 
+@pytest.mark.parametrize(
+    "obj",
+    [
+        {"videoId": "v", "title": "t", "duration_seconds": "not a number"},
+        {"videoId": "v", "title": "t", "duration_seconds": None},
+        {"videoDetails": {"videoId": "v", "title": "t", "lengthSeconds": {}}},
+    ],
+)
+def test_track_from_dict_non_numeric_duration_names_the_field(obj):
+    """A changed API must not surface as a bare int() ValueError."""
+    with pytest.raises(ValueError) as caught:
+        YoutubeTrack.from_dict(obj)
+    message = str(caught.value)
+    assert "YouTube" in message
+    assert "not a number" in message
+
+
+@pytest.mark.parametrize(
+    "obj, missing",
+    [
+        ({"videoId": "v", "title": "t"}, "duration_seconds"),
+        ({"videoDetails": {"videoId": "v", "title": "t"}}, "videoDetails.lengthSeconds"),
+    ],
+)
+def test_track_from_dict_missing_duration_names_the_path(obj, missing):
+    with pytest.raises(ValueError) as caught:
+        YoutubeTrack.from_dict(obj)
+    message = str(caught.value)
+    assert missing in message
+    assert "missing" in message
+
+
 def test_track_matches_url():
     t = YoutubeTrack("vid1", "Song", 60_000)
     assert t.matches("vid1")

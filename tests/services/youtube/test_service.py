@@ -735,17 +735,49 @@ def test_load_oauth_token_invalid_json_warns_with_path(svc, tmp_path, caplog):
     assert caplog.records[0].levelno == logging.WARNING
 
 
-def test_load_oauth_token_unreadable_logs_error_with_path(svc, tmp_path, caplog):
+def test_load_oauth_token_unreadable_raises_with_path_and_remedy(svc, tmp_path):
+    """An unreadable token file aborts. It must not look like a missing one."""
     token_file = tmp_path / "token.json"
     token_file.write_text('{"refresh_token":"r","access_token":"a"}')
     token_file.chmod(0o000)
     try:
-        with caplog.at_level(logging.ERROR):
-            assert svc._load_oauth_token(token_file) is None
+        with pytest.raises(RuntimeError) as caught:
+            svc._load_oauth_token(token_file)
     finally:
         token_file.chmod(0o600)
-    assert str(token_file) in caplog.text
-    assert caplog.records[0].levelno == logging.ERROR
+    message = str(caught.value)
+    assert str(token_file) in message
+    assert "auth-file" in message
+    assert "delete" in message
+
+
+def test_load_oauth_token_undecodable_raises_rather_than_crashing(svc, tmp_path):
+    """A non-UTF-8 token file is unreadable too. UnicodeDecodeError is a ValueError,
+    not an OSError, so it would otherwise escape past every handler here."""
+    token_file = tmp_path / "token.json"
+    token_file.write_bytes(b"\xff\xfe not utf-8")
+    with pytest.raises(RuntimeError) as caught:
+        svc._load_oauth_token(token_file)
+    assert str(token_file) in str(caught.value)
+
+
+def test_login_does_not_reauth_when_the_token_file_is_unreadable(svc, tmp_path):
+    """The bug: a valid token got overwritten by a re-auth triggered by an I/O error."""
+    auth_file = tmp_path / "auth.json"
+    auth_file.write_text('{"refresh_token":"r","access_token":"a"}')
+    auth_file.chmod(0o000)
+    svc.config = {"auth-file": str(auth_file), "client-id": "cid", "client-secret": "csec"}
+    svc._prompt_for_oauth = MagicMock()
+    try:
+        with (
+            patch("shuffleupagus.services.youtube.service.get_filepath", return_value=str(auth_file)),
+            patch("shuffleupagus.services.youtube.service.YTMusic"),
+            pytest.raises(RuntimeError, match="cannot read"),
+        ):
+            svc.login()
+    finally:
+        auth_file.chmod(0o600)
+    svc._prompt_for_oauth.assert_not_called()
 
 
 # ---------------------------------------------------------------------------

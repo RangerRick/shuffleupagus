@@ -318,6 +318,29 @@ def test_call_429_without_retry_after_does_not_cache(svc):
     assert svc.cache.read_stale(Service._RATE_LIMIT_CACHE_KEY) is None
 
 
+@pytest.mark.parametrize(
+    "exc",
+    [
+        TypeError("a programming error"),
+        AttributeError("another one"),
+        ValueError("not an API failure at all"),
+        ConnectionError("the network went away"),
+    ],
+)
+def test_call_reraises_anything_that_is_not_a_rate_limit(svc, exc):
+    """_call detects 429 and passes everything else through untouched.
+
+    This is what makes the broad catch safe, so it is worth pinning: the
+    exception the caller sees must be the original object, not a RuntimeError
+    wearing its message.
+    """
+    svc.spotify.artist.side_effect = exc
+    with pytest.raises(type(exc)) as caught:
+        svc._call(svc.spotify.artist, "a1")
+    assert caught.value is exc
+    assert svc.cache.read_stale(Service._RATE_LIMIT_CACHE_KEY) is None
+
+
 # ---------------------------------------------------------------------------
 # _require_config
 # ---------------------------------------------------------------------------

@@ -5,11 +5,15 @@ from concurrent.futures import as_completed
 import applemusicpy
 import applescript
 
+from ...core.apiresponse import api_int, api_list, api_object, api_str
 from ...core.model import Album, Artist, Service, Track
 from ...core.util import logger, parse_retry_after
 from .model import AppleMusicAlbum, AppleMusicArtist, AppleMusicTrack, sanitize_id
 
 _REQUEST_TIMEOUT = 30
+
+# Named in every message raised from an unexpected API response.
+_SERVICE_LABEL = "Apple Music"
 
 # applemusicpy defaults to 10 retries with an escalating sleep (~65s per call) and
 # ignores Retry-After entirely. Keep enough retries for a transient 5xx, few enough
@@ -28,6 +32,31 @@ def _applescript_str(value: str) -> str:
     if "\n" in value or "\r" in value:
         raise ValueError(f"Playlist name cannot contain a line break: {value!r}")
     return value.replace("\\", "\\\\").replace('"', '\\"')
+
+
+# errAEEventNotPermitted. Music.app is scriptable but this process has not been
+# granted Automation access, which is the usual state on a machine that has never
+# run this before.
+_ERR_NOT_PERMITTED = -1743
+
+
+def _run_applescript(script: applescript.AppleScript, doing: str, playlist_name: str) -> object:
+    """Run a script, turning a ScriptError into an actionable RuntimeError.
+
+    py-applescript raises rather than returning a sentinel, and an unhandled
+    ScriptError reaches the user as a traceback naming neither the playlist nor
+    anything they can do about it.
+    """
+    try:
+        return script.run()
+    except applescript.ScriptError as exc:
+        detail = f"AppleScript failed {doing} playlist '{playlist_name}': {exc!s:.200}"
+        if exc.number == _ERR_NOT_PERMITTED:
+            detail += (
+                ". Allow this program to control Music under System Settings > "
+                "Privacy & Security > Automation, then retry."
+            )
+        raise RuntimeError(detail) from exc
 
 
 def _applescript_count(result: object) -> int:
@@ -291,18 +320,15 @@ class AppleMusicService(Service):
                 timeout=self.client.session_length,
             )
             if r.status_code >= 200 and r.status_code < 300:
-                j = r.json()
-                if "meta" in j:
-                    return int(j["meta"]["total"])
-            else:
-                # instead of returning 0 values, the API throws a 404 with a "No related resources" error
-                if r.json()["errors"] and len(r.json()["errors"]) > 0:
-                    if "code" in r.json()["errors"][0] and r.json()["errors"][0]["code"] == "40403":
-                        return 0
+                return api_int(r.json(), ("meta", "total"), _SERVICE_LABEL)
+            # instead of returning 0 values, the API throws a 404 with a "No related resources" error
+            if r.json()["errors"] and len(r.json()["errors"]) > 0:
+                if "code" in r.json()["errors"][0] and r.json()["errors"][0]["code"] == "40403":
+                    return 0
 
-                logger.error(f"{self.tag}  ! error fetching playlist: {r.status_code} {r.reason}")
-                if len(r.text.strip()) > 0:
-                    logger.error(f"{self.tag}{r.text}")
+            logger.error(f"{self.tag}  ! error fetching playlist: {r.status_code} {r.reason}")
+            if len(r.text.strip()) > 0:
+                logger.error(f"{self.tag}{r.text}")
         raise Exception("Failed to fetch playlist length after 3 retries")
 
     def get_playlist_id_for_name(self, playlist_name: str) -> str:
@@ -316,11 +342,11 @@ class AppleMusicService(Service):
                 timeout=self.client.session_length,
             )
             if r.status_code >= 200 and r.status_code < 300:
-                if r.json()["data"] and len(r.json()["data"]) > 0:
-                    for playlist in r.json()["data"]:
-                        attrs = playlist.get("attributes", {})
-                        if attrs.get("name") == playlist_name:
-                            return playlist["id"]
+                for playlist in api_list(r.json(), ("data",), _SERVICE_LABEL):
+                    entry = api_object(playlist, "data[] entry", _SERVICE_LABEL)
+                    attrs = entry.get("attributes") or {}
+                    if attrs.get("name") == playlist_name:
+                        return api_str(entry, ("id",), _SERVICE_LABEL)
             else:
                 logger.error(f"{self.tag}  ! error fetching playlists: {r.status_code} {r.reason}")
                 if len(r.text.strip()) > 0:
@@ -369,7 +395,7 @@ class AppleMusicService(Service):
             end tell
         """
         )
-        scpt.run()
+        _run_applescript(scpt, "clearing", playlist_name)
 
         logger.info(f"{self.tag}  * waiting for Music.app to process the deletion")
         count_scpt = applescript.AppleScript(
@@ -380,12 +406,12 @@ class AppleMusicService(Service):
             end tell
         """
         )
-        count = _applescript_count(count_scpt.run())
+        count = _applescript_count(_run_applescript(count_scpt, "counting tracks in", playlist_name))
         for _ in range(150):
             if count == 0:
                 break
             time.sleep(2)
-            count = _applescript_count(count_scpt.run())
+            count = _applescript_count(_run_applescript(count_scpt, "counting tracks in", playlist_name))
             logger.info(f"{self.tag}    * {count} track(s) remaining...")
         else:
             raise RuntimeError(
