@@ -7,33 +7,56 @@ description = "generate and synchronize smart, balanced playlists"
 # patch floor and stops submitting the dependency graph. See #65.
 requires-python = ">=3.14"
 
+# PEP 440 compatible-release (`~=X.Y.Z`): patch bumps allowed, minor and major
+# blocked. `>=` here was an open upper bound, which is how a ruff minor release
+# walked in through Renovate's lockFileMaintenance and broke main (#38). Each
+# floor is the version currently in uv.lock, so the constraint and the lockfile
+# cannot disagree. Enforced by tests/test_dependency_pins.py. See #41.
 dependencies = [
-  "colorama                 >= 0.4.6",
-  "coloredlogs              >=15.0.1",
-  "google-api-python-client >=2.198.0",
-  "google-auth-oauthlib     >=1.4.0",
-  "pyyaml                   >=6.0.3",
+  "colorama                 ~= 0.4.6",
+  "coloredlogs              ~=15.0.1",
+  "google-api-python-client ~=2.198.0",
+  "google-auth-oauthlib     ~=1.4.0",
+  "pyyaml                   ~=6.0.3",
 
-  "apple-music-python       >= 1.0.6",
-  "py-applescript           >= 1.0.3",
-  "spotipy                  >=2.26.0",
-  "ytmusicapi               >=1.12.2",
+  "apple-music-python       ~= 1.0.6",
+  "py-applescript           ~= 1.0.3",
+  "spotipy                  ~=2.26.0",
+  "ytmusicapi               ~=1.12.2",
 ]
 
 [project.scripts]
 shuffleupagus = "shuffleupagus.shuffleupagus:main"
 
+# The upper bound is not optional. `uv build` warns about its absence on every
+# invocation, and this is the worse instance of the unbounded-pin problem: a
+# breaking uv_build release breaks the build itself rather than a runtime
+# import, and it breaks the CI smoke job (#19) that builds a wheel on every PR.
+# The shape is uv's own suggestion. Not `~=` because uv_build is versioned with
+# uv, which moves minors freely; the range tracks the 0.12 line deliberately.
 [build-system]
-requires = ["uv_build"]
+requires = ["uv_build>=0.12,<0.13"]
 build-backend = "uv_build"
 
 [dependency-groups]
+# Same compatible-release convention as [project.dependencies]. It applies to
+# both groups, not only to the tooling that can break a build -- a test-only
+# dependency that changes behaviour under us costs the same afternoon.
 dev = [
-  "hypothesis>=6.165.3",
-  "pytest>=9.1.1",
-  "pytest-cov>=7.1.0",
-  "ruff>=0.16.3",
-  "ty>=0.0.72",
+  "hypothesis~=6.165.10",
+  # Parses the PEP 440 specifiers in this file for tests/test_dependency_pins.py.
+  # It was already present as a transitive dependency; declared here because the
+  # tests import it directly. packaging ships two-component versions, so the
+  # third component is written explicitly to keep this a patch-only range.
+  "packaging~=26.3.0",
+  "pytest~=9.1.1",
+  "pytest-cov~=7.1.0",
+  "ruff~=0.16.3",
+  # `~=0.0.72` is `>=0.0.72, ==0.0.*`: it admits 0.0.73 and up, and blocks 0.1.0.
+  # #41 assumed a pre-1.0 compatible-release admits nothing at all and needs a
+  # hand-written range. It does not -- verified against packaging.specifiers --
+  # so ty takes the same form as everything else here.
+  "ty~=0.0.72",
   # Exact pin, not a range: pyright ships new checks in patch releases, so an
   # unpinned gate fails the build on someone else's schedule. Renovate bumps it
   # in a commit instead. The [nodejs] extra brings Node in as a wheel, so

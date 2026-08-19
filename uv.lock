@@ -868,6 +868,7 @@ dependencies = [
 [package.dev-dependencies]
 dev = [
     { name = "hypothesis" },
+    { name = "packaging" },
     { name = "pyright", extra = ["nodejs"] },
     { name = "pytest" },
     { name = "pytest-cov" },
@@ -877,25 +878,26 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "apple-music-python", specifier = ">=1.0.6" },
-    { name = "colorama", specifier = ">=0.4.6" },
-    { name = "coloredlogs", specifier = ">=15.0.1" },
-    { name = "google-api-python-client", specifier = ">=2.198.0" },
-    { name = "google-auth-oauthlib", specifier = ">=1.4.0" },
-    { name = "py-applescript", specifier = ">=1.0.3" },
-    { name = "pyyaml", specifier = ">=6.0.3" },
-    { name = "spotipy", specifier = ">=2.26.0" },
-    { name = "ytmusicapi", specifier = ">=1.12.2" },
+    { name = "apple-music-python", specifier = "~=1.0.6" },
+    { name = "colorama", specifier = "~=0.4.6" },
+    { name = "coloredlogs", specifier = "~=15.0.1" },
+    { name = "google-api-python-client", specifier = "~=2.198.0" },
+    { name = "google-auth-oauthlib", specifier = "~=1.4.0" },
+    { name = "py-applescript", specifier = "~=1.0.3" },
+    { name = "pyyaml", specifier = "~=6.0.3" },
+    { name = "spotipy", specifier = "~=2.26.0" },
+    { name = "ytmusicapi", specifier = "~=1.12.2" },
 ]
 
 [package.metadata.requires-dev]
 dev = [
-    { name = "hypothesis", specifier = ">=6.165.3" },
+    { name = "hypothesis", specifier = "~=6.165.10" },
+    { name = "packaging", specifier = "~=26.3.0" },
     { name = "pyright", extras = ["nodejs"], specifier = "==1.1.411" },
-    { name = "pytest", specifier = ">=9.1.1" },
-    { name = "pytest-cov", specifier = ">=7.1.0" },
-    { name = "ruff", specifier = ">=0.16.3" },
-    { name = "ty", specifier = ">=0.0.72" },
+    { name = "pytest", specifier = "~=9.1.1" },
+    { name = "pytest-cov", specifier = "~=7.1.0" },
+    { name = "ruff", specifier = "~=0.16.3" },
+    { name = "ty", specifier = "~=0.0.72" },
 ]
 
 [[package]]

@@ -1,9 +1,14 @@
 {
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  // The dependency dashboard is deliberately on. minimumReleaseAge and
+  // internalChecksFilter "strict" below make Renovate withhold a branch until
+  // the release is a week old, and the dashboard is the only place it reports
+  // what it is holding -- Renovate's own docs recommend enabling it for exactly
+  // that reason. Non-fatal config warnings surface only there too. With it off,
+  // "no PRs this week" and "Renovate is broken" looked identical (#34).
   "extends": [
     "config:recommended",
     ":configMigration",
-    ":disableDependencyDashboard",
     ":semanticCommitTypeAll(build)",
   ],
 
@@ -13,11 +18,14 @@
   "internalChecksFilter": "strict",
   "labels": ["dependencies"],
   "minimumReleaseAge": "7 days",
-  // "not-pending" waits for branch checks to finish before opening the PR.
-  // There is no CI here yet (#15), so nothing ever reports and every PR would
-  // sit out the ~25h prNotPendingHours fallback. internalChecksFilter already
-  // enforces minimumReleaseAge before the branch is pushed, so the cooldown
-  // does not depend on this.
+  // "not-pending" waits for branch checks to finish before opening the PR. This
+  // was set to "immediate" when the repo had no CI, so nothing ever reported and
+  // every PR would have sat out the ~25h prNotPendingHours fallback. CI exists
+  // now (#54), so the original reason is gone and the choice is worth re-reading
+  // on its own merits. Left as-is here and tracked in #79, because changing
+  // PR-creation timing is outside the scope of #30, #34, and #41.
+  // internalChecksFilter already enforces minimumReleaseAge before the branch is
+  // pushed, so the cooldown does not depend on this either way.
   "prCreation": "immediate",
   "prHourlyLimit": 0,
   "rangeStrategy": "bump",
@@ -28,42 +36,72 @@
   "lockFileMaintenance": { "enabled": true, "schedule": [] },
 
   // Pin Actions by digest and rewrite the trailing version comment on every
-  // bump, so the pinned ratio starts at 100% once workflows exist (#15).
+  // bump, so the pinned ratio stays at 100% across the workflows added in #54.
   "github-actions": { "pinDigests": true },
 
   "vulnerabilityAlerts": { "labels": ["dependencies", "security"] },
 
-  // Package- or manager-specific rules
+  // Package- or manager-specific rules.
+  //
+  // Two jobs, deliberately kept apart: the first rule owns merge policy, and
+  // every rule after it owns grouping. Setting groupName on the merge-policy
+  // rule put every non-major update across every manager into one PR, which was
+  // harmless with no status checks and is not harmless now that CI exists -- one
+  // bad bump would block every other update in the group, and unpicking it means
+  // finding which of five packages broke it (#30).
+  //
+  // Rules apply top to bottom and later rules win per field, so the order here
+  // is load-bearing: broad policy first, then per-manager groups, then narrower
+  // groups that refine them, then the overrides that must win outright.
   "packageRules": [
     {
+      // Merge policy for everything non-major. No groupName -- see above.
+      //
       // Enumerated, not "!major". A negation-only matchUpdateTypes list also
       // matches majors: the matcher tests ["major", "bump"] with .some(), and
       // "bump" is not excluded by "!major", so the rule returns true. rangeStrategy
-      // "bump" plus the open-ended ">=" constraints in [project.dependencies] make
-      // isBump true for majors, so every runtime major would have automerged here.
-      // Do not add "bump" to this list either — that reopens the same hole.
-      "groupName": "auto-merge non-major dependencies",
-      "groupSlug": "all-non-major",
+      // "bump" plus an open-ended constraint make isBump true for majors, so every
+      // runtime major would have automerged here. Do not add "bump" to this list
+      // either — that reopens the same hole. [project.dependencies] now uses "~="
+      // rather than ">=", which narrows the exposure but does not close it.
       "matchUpdateTypes": ["minor", "patch", "pin", "digest"],
-      "automerge": true,
-    },
-    {
-      // pep621 names depTypes after the pyproject table they came from, so the
-      // dev group is "dependency-groups" (PEP 735). npm's "devDependencies"
-      // matches nothing in a Python repo and fails silently.
-      "groupName": "auto-merge developer dependencies",
-      "groupSlug": "dev-dependencies",
-      "matchDepTypes": ["dependency-groups"],
       "automerge": true,
     },
 
     {
-      // uv reads pyproject.toml via the pep621 manager. There is no
-      // requirements.txt here, so pip_requirements matched nothing.
-      "groupName": "group PyTest package updates together",
+      // Grouping, per manager, so a failing Python bump cannot block an Actions
+      // bump. uv reads pyproject.toml via the pep621 manager; there is no
+      // requirements.txt here, so pip_requirements matches nothing.
+      "groupName": "python dependencies",
+      "groupSlug": "python-deps",
+      "matchManagers": ["pep621"],
+      "matchUpdateTypes": ["minor", "patch", "pin", "digest"],
+    },
+    {
+      "groupName": "non-major GitHub Actions",
+      "groupSlug": "github-actions-non-major",
+      "matchManagers": ["github-actions"],
+      "matchUpdateTypes": ["minor", "patch", "pin", "digest"],
+    },
+
+    {
+      // Narrower than the pep621 rule above, so it must come after it to win.
+      // pep621 names depTypes after the pyproject table they came from, so the
+      // dev group is "dependency-groups" (PEP 735). npm's "devDependencies"
+      // matches nothing in a Python repo and fails silently.
+      "groupName": "developer dependencies",
+      "groupSlug": "dev-dependencies",
+      "matchDepTypes": ["dependency-groups"],
+      "matchUpdateTypes": ["minor", "patch", "pin", "digest"],
+    },
+    {
+      // Narrower still: pytest and its plugins move together, so they are worth
+      // splitting back out of the developer-dependencies group.
+      "groupName": "pytest packages",
       "groupSlug": "pytest",
       "matchManagers": ["pep621"],
       "matchPackageNames": ["/^pytest/"],
+      "matchUpdateTypes": ["minor", "patch", "pin", "digest"],
     },
 
     {
