@@ -56,6 +56,58 @@ def _load_yaml_mapping(path: str, empty_ok: bool = False) -> dict:
     return data
 
 
+def _require_mapping(value: object, what: str, path: str) -> dict:
+    """Return a value that must be a mapping, naming the file and the entry.
+
+    Checked here rather than at each accessor, so the message can name the file
+    the user has to edit. An accessor only knows it was handed the wrong shape.
+    """
+    if not isinstance(value, dict):
+        raise RuntimeError(  # noqa: TRY004 — a hand-edited file, see _load_yaml_mapping
+            f"{path}: {what} must be a mapping, not a {type(value).__name__}."
+        )
+    return value
+
+
+def _check_services(services: dict, path: str) -> None:
+    """Every service entry must be a mapping of settings."""
+    for name, entry in services.items():
+        _require_mapping(entry, f"service '{name}'", path)
+
+
+def _check_artists(artists: dict, path: str) -> None:
+    """Validate every artist entry and the blocks under it.
+
+    A bare `Artist A:` key parses as None and is allowed: it is an artist the
+    user has listed but not yet mapped to any service. `service_artists` already
+    read it that way, while the other three accessors raised AttributeError on
+    it, so this settles which of the two was right.
+    """
+    for name, entry in artists.items():
+        if entry is None:
+            continue
+        artist = _require_mapping(entry, f"artist '{name}'", path)
+
+        services = artist.get("services")
+        if services is not None:
+            _require_mapping(services, f"artist '{name}' services", path)
+
+        excludes = artist.get("exclude")
+        if excludes is None:
+            continue
+        for service_name, rules in _require_mapping(excludes, f"artist '{name}' exclude", path).items():
+            if rules is None:
+                continue
+            block = _require_mapping(rules, f"artist '{name}' exclude.{service_name}", path)
+            for kind in ("albums", "tracks"):
+                listed = block.get(kind)
+                if listed is not None and not isinstance(listed, list):
+                    raise RuntimeError(
+                        f"{path}: artist '{name}' exclude.{service_name}.{kind} must be a list, "
+                        f"not a {type(listed).__name__}."
+                    )
+
+
 class Config:
     __service_config: dict = {}
     __artist_config: dict = {}
@@ -79,6 +131,7 @@ class Config:
             raise RuntimeError(  # noqa: TRY004 — a hand-edited file, see _load_yaml_mapping
                 f"{app_config_path}: 'services' must be a mapping, not a {type(services).__name__}."
             )
+        _check_services(services, app_config_path)
         self.__service_config = services
 
         artist_config_path = get_filepath("artists.yaml")
@@ -87,7 +140,9 @@ class Config:
 
         # An empty artists.yaml is a legitimate first-run state: nothing to sync
         # yet. An empty config.yaml is not, since it names the services to run.
-        self.__artist_config = _load_yaml_mapping(artist_config_path, empty_ok=True)
+        artists = _load_yaml_mapping(artist_config_path, empty_ok=True)
+        _check_artists(artists, artist_config_path)
+        self.__artist_config = artists
 
     def is_enabled(self, name: str) -> bool:
         return self.__service_config.get(name, {}).get("enabled", True)
@@ -113,7 +168,10 @@ class Config:
     def vip_artists(self, service_name: str) -> list:
         ret = []
         for artist_name in self.__artist_config:
-            artist = self.__artist_config[artist_name]
+            # A bare `Artist A:` key parses as None — an artist listed but not
+            # yet mapped to a service. Shape is validated at load, so anything
+            # that is not None here is a mapping.
+            artist = self.__artist_config[artist_name] or {}
             services = artist.get("services", {}) or {}
             if service_name in services and artist.get("vip", False):
                 ret.append(services.get(service_name))
@@ -133,7 +191,7 @@ class Config:
     def excluded_albums(self, service_name: str) -> list:
         ret = []
         for artist_name in self.__artist_config:
-            artist = self.__artist_config[artist_name]
+            artist = self.__artist_config[artist_name] or {}
             excludes = (artist.get("exclude") or {}).get(service_name, {}) or {}
             for album in excludes.get("albums", []):
                 ret.append(album)
@@ -142,7 +200,7 @@ class Config:
     def excluded_tracks(self, service_name: str) -> list:
         ret = []
         for artist_name in self.__artist_config:
-            artist = self.__artist_config[artist_name]
+            artist = self.__artist_config[artist_name] or {}
             excludes = (artist.get("exclude") or {}).get(service_name, {}) or {}
             for track in excludes.get("tracks", []):
                 ret.append(track)
