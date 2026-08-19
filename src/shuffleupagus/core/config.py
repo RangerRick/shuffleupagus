@@ -6,11 +6,26 @@ import yaml
 _CONFIG_DIR = Path("~/.config/shuffleupagus").expanduser()
 
 
-def get_filepath(name: str) -> str:
-    resolved = (_CONFIG_DIR / name).resolve()
-    if not resolved.is_relative_to(_CONFIG_DIR.resolve()):
+def contained_path(root: Path, name: str) -> str:
+    """Join `name` under `root`, refusing anything that lands outside it.
+
+    One implementation on purpose. The cache root needs the same guard as the
+    config root (#76), and a security check kept in two places is one someone
+    fixes once — the second copy then quietly becomes the way in.
+
+    `resolve()` runs on both sides so a symlinked root compares against what it
+    actually points at. An absolute `name` replaces the root under pathlib's
+    join rules rather than extending it, which is why it has to be caught here
+    and not by a `..` check.
+    """
+    resolved = (root / name).resolve()
+    if not resolved.is_relative_to(root.resolve()):
         raise ValueError(f"Path traversal detected: {name!r}")
     return str(resolved)
+
+
+def get_filepath(name: str) -> str:
+    return contained_path(_CONFIG_DIR, name)
 
 
 def _load_yaml_mapping(path: str, empty_ok: bool = False) -> dict:
