@@ -7,7 +7,7 @@ from collections.abc import Sequence
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any, Self
 
-from .cache import CACHE_DEFAULT_CUTOFF, Cache
+from .cache import CACHE_DEFAULT_CUTOFF, Cache, CacheClosedError
 from .config import Config
 from .util import format_retry_message, logger, service_tag, spread_artist_playlists
 
@@ -192,8 +192,12 @@ class Service:
         self._shutdown_pools(wait=True)
         # Same guarantee as Cache.__exit__: eviction failing must not leave the
         # connection open, and _closed is already set so nothing retries this.
+        # A cache another holder already closed is not a teardown failure, and
+        # raising here would mask whatever sent us into close().
         try:
             self.cache.save()
+        except CacheClosedError:
+            pass
         finally:
             self.cache.close()
 

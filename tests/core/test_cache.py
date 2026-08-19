@@ -291,3 +291,34 @@ def test_exit_closes_even_when_eviction_fails(tmp_path, monkeypatch):
     with pytest.raises(RuntimeError, match="boom"):
         c.__exit__(None, None, None)
     assert c.closed is True, "connection leaked when eviction raised"
+
+
+def test_exit_tolerates_another_holder_closing_first(tmp_path, monkeypatch):
+    """The unlocked check is a race; __exit__ must not raise because it lost it."""
+    monkeypatch.setattr(Cache, "_db_path", lambda self: str(tmp_path / f"{self.name}.db"))
+    c = Cache("race")
+    original_save = Cache.save
+
+    def racing_save(self):
+        self.close()  # stands in for another thread winning the race
+        return original_save(self)
+
+    monkeypatch.setattr(Cache, "save", racing_save)
+    c.__exit__(None, None, None)
+    assert c.closed is True
+
+
+def test_exit_does_not_mask_the_bodys_exception(tmp_path, monkeypatch):
+    """A teardown error must not replace the error the caller cares about."""
+    monkeypatch.setattr(Cache, "_db_path", lambda self: str(tmp_path / f"{self.name}.db"))
+    c = Cache("mask")
+    original_save = Cache.save
+
+    def racing_save(self):
+        self.close()
+        return original_save(self)
+
+    monkeypatch.setattr(Cache, "save", racing_save)
+    with pytest.raises(ValueError, match="the real error"), c:
+        raise ValueError("the real error")
+    assert c.closed is True

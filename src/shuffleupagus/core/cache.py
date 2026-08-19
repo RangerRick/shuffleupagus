@@ -166,12 +166,17 @@ class Cache:
         # two teardown paths would leave different amounts of expired data on
         # disk for the same cache.
         #
+        # No pre-check on _closed: reading it unlocked is a race, and losing it
+        # would raise CacheClosedError out of teardown — which masks whatever the
+        # with body raised. Another holder having closed first is not something
+        # teardown should complain about.
+        #
         # close() is in a finally because releasing the connection is the whole
         # promise of __exit__: eviction failing must not turn a with block into
-        # a leak. It also covers another thread closing between the check and
-        # the save(), since close() is idempotent.
+        # a leak.
         try:
-            if not self._closed:
-                self.save()
+            self.save()
+        except CacheClosedError:
+            pass
         finally:
             self.close()
