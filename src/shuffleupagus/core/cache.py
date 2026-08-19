@@ -1,11 +1,16 @@
 import json
 import os
 import sqlite3
+import stat
 import threading
 import time
 from typing import Self
 
 CACHE_DEFAULT_CUTOFF = 60 * 60 * 24 * 7 * 1.0  # 1 week
+
+# Absent on platforms without symlinks (Windows). Zero is a no-op in the flag
+# set, so the open still works and _prepare_file falls back to an islink check.
+_O_NOFOLLOW = getattr(os, "O_NOFOLLOW", 0)
 
 
 class CacheClosedError(RuntimeError):
@@ -53,8 +58,18 @@ class Cache:
         self._reported: set[str] = set()
         print(f"* loading '{name}' cache", flush=True)
         path = self._db_path()
-        os.makedirs(os.path.dirname(path), exist_ok=True)
-        self._conn = sqlite3.connect(path, check_same_thread=False)
+        # Opening is inside the policy too. An unwritable cache directory or a
+        # database that will not open is the most common real breakage of a
+        # cache, and it is exactly the case where a rebuildable file should
+        # cost a slower run rather than the whole run.
+        self._conn: sqlite3.Connection | None = None
+        try:
+            self._prepare_dir(os.path.dirname(path))
+            self._prepare_file(path)
+            self._conn = sqlite3.connect(path, check_same_thread=False)
+        except (OSError, sqlite3.Error) as exc:
+            self._degrade("opening", exc)
+            return
         try:
             self._conn.execute("PRAGMA journal_mode=WAL")
             self._conn.execute("PRAGMA synchronous=NORMAL")
@@ -69,6 +84,75 @@ class Cache:
             self._conn.commit()
         except sqlite3.DatabaseError as exc:
             self._degrade("opening", exc)
+
+    @property
+    def _db(self) -> sqlite3.Connection:
+        """The connection, for code that has already passed the _degraded gate.
+
+        _conn is None only when construction failed, and that also sets
+        _degraded, which every operation checks before reaching here. This says
+        that invariant out loud so the type checker can see it, rather than
+        leaving six call sites indexing an Optional.
+        """
+        if self._conn is None:
+            raise CacheUnavailableError(f"cache '{self.name}' was never opened. {self._remedy(sqlite3.Error())}")
+        return self._conn
+
+    _DIR_MODE = 0o700
+    _FILE_MODE = 0o600
+
+    def _prepare_dir(self, directory: str) -> None:
+        """Create the cache directory private, and tighten one left by an older version.
+
+        The directory mode is the control that matters. sqlite creates the
+        `-wal` and `-shm` sidecar files itself, under its own umask, so their
+        modes are not ours to set — a directory nobody else can traverse is
+        what keeps them unreachable.
+
+        The chmod is not redundant with the makedirs mode: makedirs applies a
+        mode only to directories it actually creates, so an upgrade from a
+        version that left 0755 behind would otherwise stay exposed forever.
+        """
+        os.makedirs(directory, mode=self._DIR_MODE, exist_ok=True)
+        # Refused rather than resolved. os.chmod follows symlinks and has no
+        # working follow_symlinks=False on Linux, so a symlinked cache
+        # directory would make this a chmod of whatever it points at.
+        if os.path.islink(directory):
+            raise OSError(f"cache directory {directory} is a symlink; refusing to change its target's permissions")
+        if stat.S_IMODE(os.stat(directory).st_mode) & 0o077:
+            os.chmod(directory, self._DIR_MODE)
+            # Said out loud: this also reverts a mode the user may have chosen
+            # on purpose, and it would do so again on every run. Silently
+            # undoing someone's decision leaves them nothing to respond to.
+            print(f"* tightened {directory} to {self._DIR_MODE:o}", flush=True)
+
+    def _prepare_file(self, path: str) -> None:
+        """Make sure the database exists at the right mode before sqlite opens it.
+
+        sqlite creates the file under the process umask, which on a default
+        umask of 022 leaves it world-readable from the moment connect() returns
+        until a chmod lands. A descriptor opened in that window keeps its
+        access afterwards, so the file is created at the right mode instead of
+        being narrowed after the fact.
+
+        O_NOFOLLOW refuses a symlink for the same reason _prepare_dir does, and
+        it does so atomically — unlike an islink() check, nothing can swap the
+        path between the test and the open. It is absent on some platforms
+        (Windows), where the islink() check below stands in: weaker, because it
+        is racy, but a great deal better than following the link. Reaching for
+        the flag unconditionally would raise AttributeError, which the
+        (OSError, sqlite3.Error) guard in __init__ does not catch, so the run
+        would abort where it should have degraded.
+
+        O_CREAT applies the mode only when it actually creates the file, so a
+        database left world-readable by an older version is narrowed below.
+        """
+        if not _O_NOFOLLOW and os.path.islink(path):
+            raise OSError(f"cache database {path} is a symlink; refusing to write through it")
+        fd = os.open(path, os.O_CREAT | os.O_RDWR | _O_NOFOLLOW, self._FILE_MODE)
+        os.close(fd)
+        if stat.S_IMODE(os.stat(path).st_mode) & 0o077:
+            os.chmod(path, self._FILE_MODE)
 
     def _decode(self, value: str, required: bool = False):
         """Decode a stored value, degrading to a miss if it is not valid JSON.
@@ -118,10 +202,21 @@ class Cache:
             return
         self._reported.add(kind)
         print(
-            f"! cache '{self.name}' is unusable, continuing without it ({operation}): {str(exc)!r:.60}. "
+            f"! cache '{self.name}' is unusable, continuing without it ({operation}): {self._brief(exc)}. "
             f"{self._remedy(exc)}",
             flush=True,
         )
+
+    @staticmethod
+    def _brief(exc: Exception, limit: int = 60) -> str:
+        """A bounded repr of an untrusted message, marked when it was cut.
+
+        The sqlite message can carry a row this project does not control, so it
+        is truncated. Without the ellipsis the reader cannot tell whether they
+        are looking at the whole message or the first 60 characters of one.
+        """
+        text = repr(str(exc))
+        return text if len(text) <= limit else text[:limit] + "…"
 
     def _remedy(self, exc: Exception) -> str:
         """Advice that fits the failure, or none at all.
@@ -175,7 +270,7 @@ class Cache:
             if self._degraded:
                 return self._unusable(required, "read")
             try:
-                row = self._conn.execute(
+                row = self._db.execute(
                     "SELECT value, stored_at, ttl FROM cache WHERE key = ?",
                     (key,),
                 ).fetchone()
@@ -207,7 +302,7 @@ class Cache:
             if self._degraded:
                 return self._unusable(required, "read")
             try:
-                row = self._conn.execute("SELECT value FROM cache WHERE key = ?", (key,)).fetchone()
+                row = self._db.execute("SELECT value FROM cache WHERE key = ?", (key,)).fetchone()
             except sqlite3.DatabaseError as exc:
                 self._degrade("reading", exc)
                 return self._unusable(required, "read")
@@ -231,11 +326,11 @@ class Cache:
                 self._unusable(required, "written")
                 return obj
             try:
-                self._conn.execute(
+                self._db.execute(
                     "INSERT OR REPLACE INTO cache (key, value, stored_at, ttl) VALUES (?, ?, ?, ?)",
                     (key, json.dumps(obj), time.time(), effective_ttl),
                 )
-                self._conn.commit()
+                self._db.commit()
             except sqlite3.DatabaseError as exc:
                 self._degrade("writing", exc)
                 self._unusable(required, "written")
@@ -253,11 +348,11 @@ class Cache:
             if self._degraded:
                 return False
             try:
-                cursor = self._conn.execute(
+                cursor = self._db.execute(
                     "UPDATE cache SET stored_at = ? WHERE key = ?",
                     (time.time(), key),
                 )
-                self._conn.commit()
+                self._db.commit()
             except sqlite3.DatabaseError as exc:
                 self._degrade("updating", exc)
                 return False
@@ -270,8 +365,8 @@ class Cache:
             if self._degraded:
                 return False
             try:
-                cursor = self._conn.execute("DELETE FROM cache WHERE key = ?", (key,))
-                self._conn.commit()
+                cursor = self._db.execute("DELETE FROM cache WHERE key = ?", (key,))
+                self._db.commit()
             except sqlite3.DatabaseError as exc:
                 self._degrade("deleting", exc)
                 return False
@@ -288,11 +383,11 @@ class Cache:
             if self._degraded:
                 return 0
             try:
-                cursor = self._conn.execute(
+                cursor = self._db.execute(
                     "DELETE FROM cache WHERE (? - stored_at) > ttl",
                     (time.time(),),
                 )
-                self._conn.commit()
+                self._db.commit()
             except sqlite3.DatabaseError as exc:
                 self._degrade("evicting", exc)
                 return 0
@@ -312,17 +407,25 @@ class Cache:
         Closing twice is a no-op: teardown paths can reach this more than once,
         and making the second call raise would turn correct cleanup into an
         error.
+
+        _closed is set only once the connection is actually released. Setting it
+        first meant a close that raised left the descriptor open and the cache
+        marked closed, so nothing would ever try again — the one path where a
+        second call is not a no-op but a retry.
         """
         with self._lock:
             if self._closed:
                 return
-            self._closed = True
+            if self._conn is None:
+                # Construction failed before the connection existed.
+                self._closed = True
+                return
             try:
                 self._conn.close()
             except sqlite3.DatabaseError as exc:
-                # The connection is unusable either way, and _closed is already
-                # set, so the cache is released. Reporting is all that is left.
                 self._degrade("closing", exc)
+                return
+            self._closed = True
 
     def __enter__(self) -> Self:
         return self

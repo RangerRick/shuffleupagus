@@ -129,6 +129,35 @@ class AppleMusicService(Service):
             raise RuntimeError("Apple Music rate-limited (no Retry-After header). Try again later.") from e
         raise RuntimeError(f"Apple Music API error ({status}) fetching {what}: {e}") from e
 
+    def _absent_or_raise(self, e: Exception, what: str, which: str) -> None:
+        """Decide whether a failed fetch means "not there" or "could not tell".
+
+        Returning None for both is how an artist disappears from the playlist
+        without anyone being told. A 404 is a real absence — the catalogue does
+        not have it, and continuing is correct. Anything else is a failure to
+        find out, and answering "not found" to that produces a playlist quietly
+        missing whatever the network happened to drop.
+
+        RuntimeError rather than a sentinel, per the convention on #28:
+        shuffleupagus.py logs it without a traceback and lets the other services
+        carry on, so a broken Apple Music run does not take Spotify with it.
+
+        applemusicpy exhausts its own retries before raising, so anything
+        reaching here has already been tried more than once.
+        """
+        self._reraise_if_fatal(e, what)
+        response = getattr(e, "response", None)
+        status = getattr(response, "status_code", None)
+        if status == 404:
+            # Bounded and escaped on this path too, not just the raise below:
+            # `which` is the same API-derived value either way.
+            logger.info(f"{self.tag}  * no {what} for {which!r:.120} on Apple Music, skipping")
+            return
+        detail = f" ({status})" if status is not None else ""
+        # `which` is built from API response data at half these call sites, so
+        # it is bounded and escaped like any other untrusted value in a message.
+        raise RuntimeError(f"Apple Music could not fetch {what} for {which!r:.120}{detail}: {e!r:.200}") from e
+
     # model: https://developer.apple.com/documentation/applemusicapi/artists
     def get_artist(self, artist) -> AppleMusicArtist | None:
         if isinstance(artist, str):
@@ -148,8 +177,7 @@ class AppleMusicService(Service):
                     ret = artist_obj
                     self.cache.write(cache_key, ret)
             except Exception as e:
-                self._reraise_if_fatal(e, "artist")
-                logger.error(f"{self.tag}  ! error fetching artist: {e}")
+                self._absent_or_raise(e, "artist", artist_id)
 
         if ret is not None:
             data = api_list(ret, ("data",), _SERVICE_LABEL)
@@ -171,8 +199,7 @@ class AppleMusicService(Service):
                     ret = album_obj
                     self.cache.write(cache_key, ret)
             except Exception as e:
-                self._reraise_if_fatal(e, "album")
-                logger.error(f"{self.tag}  ! error fetching album: {e}")
+                self._absent_or_raise(e, "album", album_id)
 
         if ret is not None:
             data = api_list(ret, ("data",), _SERVICE_LABEL)
@@ -193,8 +220,7 @@ class AppleMusicService(Service):
                     ret = albums
                     self.cache.write(cache_key, ret)
             except Exception as e:
-                self._reraise_if_fatal(e, "artist albums")
-                logger.warning(f"{self.tag}  ! error fetching albums for {artist.name} ({artist.id}): {e}")
+                self._absent_or_raise(e, "artist albums", f"{artist.name} ({artist.id})")
 
         # ret is None only when the fetch above failed and was logged. An
         # empty relationship answers {"data": []}, so "data" itself is always
@@ -222,8 +248,7 @@ class AppleMusicService(Service):
                     ret = track_obj
                     self.cache.write(cache_key, ret)
             except Exception as e:
-                self._reraise_if_fatal(e, "track")
-                logger.error(f"{self.tag}  ! error fetching track: {e}")
+                self._absent_or_raise(e, "track", track_id)
 
         if ret is not None:
             data = api_list(ret, ("data",), _SERVICE_LABEL)
@@ -268,8 +293,7 @@ class AppleMusicService(Service):
                     ret = album_tracks
                     self.cache.write(cache_key, ret)
             except Exception as e:
-                self._reraise_if_fatal(e, "album tracks")
-                logger.error(f"{self.tag}  ! error fetching album tracks: {e}")
+                self._absent_or_raise(e, "album tracks", f"{album.name} ({album.id})")
 
         if ret is None:
             return []
@@ -294,14 +318,33 @@ class AppleMusicService(Service):
 
         tracks: list[Track] = []
         futures = {self.album_pool.submit(self.get_album_tracks, album, artist): album for album in albums}
+        fatal_error = None
         for future in as_completed(futures):
             album = futures[future]
             try:
                 tracks += future.result()
+            except RuntimeError as exc:
+                # RuntimeError is the convention's "abort this service" signal —
+                # a rate-limit window, an unusable cache, a fetch that failed
+                # rather than found nothing. Logging it here and carrying on
+                # turns it straight back into a silently missing album, which
+                # is the thing raising it was meant to stop.
+                fatal_error = exc
+                break
             except Exception:
                 logger.exception(
                     f"{self.tag}  ! error fetching tracks for album '{album.name}' (artist: {artist.name}), skipping"
                 )
+
+        if fatal_error is not None:
+            # Drop whatever has not started yet. We are aborting because the
+            # service told us to stop — often a rate limit — so letting queued
+            # work carry on calling the same API is both pointless and rude.
+            # Already-running tasks cannot be interrupted; this is the same
+            # guarantee Service._shutdown_pools gives.
+            for pending in futures:
+                pending.cancel()
+            raise fatal_error
 
         return tracks
 
@@ -316,8 +359,7 @@ class AppleMusicService(Service):
                     ret = top_tracks
                 self.cache.write(cache_key, ret)
             except Exception as e:
-                self._reraise_if_fatal(e, "top tracks")
-                logger.error(f"{self.tag}  ! error fetching top tracks: {e}")
+                self._absent_or_raise(e, "top tracks", f"{artist.name} ({artist.id})")
 
         if ret is None:
             return []

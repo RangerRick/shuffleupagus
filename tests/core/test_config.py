@@ -297,3 +297,120 @@ def test_non_utf8_config_is_rejected_under_any_locale(tmp_path, monkeypatch):
 
     with pytest.raises(RuntimeError, match="UTF-8"):
         Config()
+
+
+# --- entry shape below the top level (#70, #73 item 5) ---
+
+
+def _cfg(tmp_path, monkeypatch, services, artists):
+    cfg_dir = _configure_paths(tmp_path, monkeypatch)
+    (cfg_dir / "config.yaml").write_text(yaml.dump({"services": services}))
+    (cfg_dir / "artists.yaml").write_text(yaml.dump(artists))
+    return cfg_dir
+
+
+@pytest.mark.parametrize("bad", ["enabled", ["spotify"], 42, True])
+def test_a_non_mapping_service_entry_names_the_service(tmp_path, monkeypatch, bad):
+    """`spotify: enabled` instead of `spotify: {enabled: true}` is a real typo."""
+    _cfg(tmp_path, monkeypatch, {"spotify": bad}, {})
+    with pytest.raises(RuntimeError) as excinfo:
+        Config()
+    assert "spotify" in str(excinfo.value)
+    assert "config.yaml" in str(excinfo.value)
+
+
+@pytest.mark.parametrize("bad", ["spotify", ["spotify"], 42])
+def test_a_non_mapping_artist_entry_names_the_artist(tmp_path, monkeypatch, bad):
+    _cfg(tmp_path, monkeypatch, {}, {"Some Band": bad})
+    with pytest.raises(RuntimeError) as excinfo:
+        Config()
+    assert "Some Band" in str(excinfo.value)
+    assert "artists.yaml" in str(excinfo.value)
+
+
+def test_a_bare_artist_key_is_allowed(tmp_path, monkeypatch):
+    """`Artist A:` with nothing under it is a legitimate not-yet-configured state.
+
+    service_artists already tolerated it; the other three accessors crashed.
+    """
+    cfg_dir = _configure_paths(tmp_path, monkeypatch)
+    (cfg_dir / "config.yaml").write_text(yaml.dump({"services": {}}))
+    (cfg_dir / "artists.yaml").write_text("Artist A:\nArtist B:\n  services:\n    spotify: sid\n")
+    config = Config()
+    assert config.vip_artists("spotify") == []
+    assert config.service_artists("spotify") == ["sid"]
+    assert config.excluded_albums("spotify") == []
+    assert config.excluded_tracks("spotify") == []
+
+
+@pytest.mark.parametrize("accessor", ["vip_artists", "excluded_albums", "excluded_tracks", "service_artists"])
+def test_no_accessor_raises_an_attribute_error(tmp_path, monkeypatch, accessor):
+    """AttributeError from inside an accessor is the failure #70 is about."""
+    cfg_dir = _configure_paths(tmp_path, monkeypatch)
+    (cfg_dir / "config.yaml").write_text(yaml.dump({"services": {}}))
+    (cfg_dir / "artists.yaml").write_text("Artist A:\n")
+    config = Config()
+    assert getattr(config, accessor)("spotify") == []
+
+
+def test_a_non_mapping_services_block_on_an_artist(tmp_path, monkeypatch):
+    _cfg(tmp_path, monkeypatch, {}, {"Band": {"services": "spotify"}})
+    with pytest.raises(RuntimeError, match="Band"):
+        Config()
+
+
+def test_a_non_mapping_exclude_block(tmp_path, monkeypatch):
+    _cfg(tmp_path, monkeypatch, {}, {"Band": {"services": {"spotify": "s"}, "exclude": "albums"}})
+    with pytest.raises(RuntimeError, match="Band"):
+        Config()
+
+
+def test_a_non_list_exclude_albums(tmp_path, monkeypatch):
+    _cfg(
+        tmp_path,
+        monkeypatch,
+        {},
+        {"Band": {"services": {"spotify": "s"}, "exclude": {"spotify": {"albums": "just-one"}}}},
+    )
+    with pytest.raises(RuntimeError, match="Band"):
+        Config()
+
+
+def test_a_valid_config_is_unchanged(tmp_path, monkeypatch):
+    _cfg(
+        tmp_path,
+        monkeypatch,
+        {"spotify": {"enabled": True, "playlist": "P", "test-playlist": "T"}},
+        {
+            "Band": {
+                "services": {"spotify": "sid"},
+                "vip": True,
+                "exclude": {"spotify": {"albums": ["a1"], "tracks": ["t1"]}},
+            }
+        },
+    )
+    config = Config()
+    assert config.is_enabled("spotify") is True
+    assert config.playlist("spotify") == "P"
+    assert config.vip_artists("spotify") == ["sid"]
+    assert config.excluded_albums("spotify") == ["a1"]
+    assert config.excluded_tracks("spotify") == ["t1"]
+
+
+def test_a_malicious_artist_name_is_escaped_in_the_message(tmp_path, monkeypatch):
+    """A key is file content, so it is escaped before it reaches a log.
+
+    A raw name carrying a terminal escape sequence would otherwise be
+    interpreted by whatever renders the message.
+    """
+    _cfg(tmp_path, monkeypatch, {}, {"\x1b[31mred\x1b[0m": "not-a-mapping"})
+    with pytest.raises(RuntimeError) as excinfo:
+        Config()
+    assert "\x1b" not in str(excinfo.value)
+
+
+def test_a_very_long_artist_name_is_truncated(tmp_path, monkeypatch):
+    _cfg(tmp_path, monkeypatch, {}, {"x" * 5000: "not-a-mapping"})
+    with pytest.raises(RuntimeError) as excinfo:
+        Config()
+    assert len(str(excinfo.value)) < 300

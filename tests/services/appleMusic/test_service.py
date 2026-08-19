@@ -1,6 +1,8 @@
 """Tests for AppleMusicService with all network/applescript calls mocked."""
 
+import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 from unittest.mock import MagicMock, patch
 
 import applescript
@@ -95,10 +97,14 @@ def test_get_artist_from_artist_object(svc):
     svc.client.artist.assert_not_called()
 
 
-def test_get_artist_api_error_returns_none(svc):
+def test_get_artist_api_error_raises(svc):
+    """A network error is a failure to find out, not an artist that is absent.
+
+    Answering None dropped the artist from the playlist with nothing said.
+    """
     svc.client.artist.side_effect = Exception("network error")
-    artist = svc.get_artist("a1")
-    assert artist is None
+    with pytest.raises(RuntimeError, match="could not fetch artist"):
+        svc.get_artist("a1")
 
 
 def test_get_artist_empty_data_returns_none(svc):
@@ -219,10 +225,10 @@ def test_get_album_by_id_cache_hit(svc):
     svc.client.album.assert_not_called()
 
 
-def test_get_album_by_id_error_returns_none(svc):
+def test_get_album_by_id_error_raises(svc):
     svc.client.album.side_effect = Exception("api error")
-    album = svc.get_album_by_id("alb1")
-    assert album is None
+    with pytest.raises(RuntimeError, match="could not fetch album"):
+        svc.get_album_by_id("alb1")
 
 
 # ---------------------------------------------------------------------------
@@ -264,12 +270,12 @@ def test_get_artist_albums_empty(svc):
     assert albums == []
 
 
-def test_get_artist_albums_error_returns_empty(svc):
+def test_get_artist_albums_error_raises(svc):
     from shuffleupagus.core.model import Artist
 
     svc.client.artist_relationship.side_effect = Exception("error")
-    albums = svc.get_artist_albums(Artist("a1", "A"))
-    assert albums == []
+    with pytest.raises(RuntimeError, match="could not fetch artist albums"):
+        svc.get_artist_albums(Artist("a1", "A"))
 
 
 # ---------------------------------------------------------------------------
@@ -344,10 +350,10 @@ def test_get_track_by_id_sanitizes_id(svc):
     svc.client.song.assert_called_once_with("t1")
 
 
-def test_get_track_by_id_error_returns_none(svc):
+def test_get_track_by_id_error_raises(svc):
     svc.client.song.side_effect = Exception("network error")
-    track = svc._get_track_by_id("t1")
-    assert track is None
+    with pytest.raises(RuntimeError, match="could not fetch track"):
+        svc._get_track_by_id("t1")
 
 
 def test_get_track_by_id_fatal_error_raises(svc):
@@ -395,12 +401,12 @@ def test_get_artist_top_tracks_empty(svc):
     assert tracks == []
 
 
-def test_get_artist_top_tracks_error_returns_empty(svc):
+def test_get_artist_top_tracks_error_raises(svc):
     from shuffleupagus.core.model import Artist
 
     svc.client.artist_relationship_view.side_effect = Exception("error")
-    tracks = svc.get_artist_top_tracks(Artist("a1", "A"))
-    assert tracks == []
+    with pytest.raises(RuntimeError, match="could not fetch top tracks"):
+        svc.get_artist_top_tracks(Artist("a1", "A"))
 
 
 # ---------------------------------------------------------------------------
@@ -1076,3 +1082,130 @@ def test_get_artist_albums_failed_fetch_is_still_empty(svc):
     svc.client.artist_relationship.return_value = None
     artist = MagicMock(id="a1", name="Artist")
     assert svc.get_artist_albums(artist) == []
+
+
+# ---------------------------------------------------------------------------
+# A failed fetch is not a missing artist (#73)
+# ---------------------------------------------------------------------------
+
+
+def test_a_404_still_means_not_found(svc):
+    """The one status that genuinely means the thing is not there."""
+    svc.client.artist.side_effect = _http_error(404)
+    assert svc.get_artist("a1") is None
+
+
+@pytest.mark.parametrize("status", [500, 502, 503])
+def test_a_server_error_is_not_a_missing_artist(svc, status):
+    """Answering None here silently drops the artist from the playlist."""
+    svc.client.artist.side_effect = _http_error(status)
+    with pytest.raises(RuntimeError, match="artist"):
+        svc.get_artist("a1")
+
+
+def test_a_network_error_is_not_a_missing_artist(svc):
+    """No response at all, so no status to inspect."""
+    svc.client.artist.side_effect = requests.exceptions.ConnectionError("connection reset")
+    with pytest.raises(RuntimeError, match="artist"):
+        svc.get_artist("a1")
+
+
+def test_a_failed_album_fetch_raises(svc):
+    svc.client.album.side_effect = _http_error(503)
+    with pytest.raises(RuntimeError, match="album"):
+        svc.get_album_by_id("alb1")
+
+
+def test_a_failed_album_list_raises(svc):
+    svc.client.artist_relationship.side_effect = _http_error(503)
+    with pytest.raises(RuntimeError):
+        svc.get_artist_albums(MagicMock(id="a1", name="Artist"))
+
+
+def test_a_missing_album_list_is_still_empty(svc):
+    svc.client.artist_relationship.side_effect = _http_error(404)
+    assert svc.get_artist_albums(MagicMock(id="a1", name="Artist")) == []
+
+
+@pytest.mark.parametrize("status", [401, 403])
+def test_auth_failures_still_abort(svc, status):
+    svc.client.artist.side_effect = _http_error(status)
+    with pytest.raises(RuntimeError, match="Apple Music API error"):
+        svc.get_artist("a1")
+
+
+def test_the_message_names_the_artist(svc):
+    svc.client.artist.side_effect = _http_error(500)
+    with pytest.raises(RuntimeError) as excinfo:
+        svc.get_artist("a1")
+    assert "a1" in str(excinfo.value)
+
+
+def test_get_artist_tracks_does_not_swallow_the_abort_signal(svc):
+    """RuntimeError is the convention's "abort this service" signal.
+
+    The album pool caught Exception and logged, so a fetch failure raised by
+    _absent_or_raise was turned straight back into a silently skipped album.
+    """
+    album = MagicMock(id="alb1", name="Album")
+    svc.get_artist_albums = MagicMock(return_value=[album])
+    svc.get_album_tracks = MagicMock(side_effect=RuntimeError("Apple Music could not fetch album tracks"))
+    svc._album_pool = ThreadPoolExecutor(max_workers=1)
+    with pytest.raises(RuntimeError, match="could not fetch album tracks"):
+        svc.get_artist_tracks(MagicMock(id="a1", name="Artist"))
+
+
+def test_get_artist_tracks_still_skips_an_unexpected_error(svc):
+    """Anything that is not the abort signal keeps the per-album skip."""
+    album = MagicMock(id="alb1", name="Album")
+    svc.get_artist_albums = MagicMock(return_value=[album])
+    svc.get_album_tracks = MagicMock(side_effect=ValueError("malformed album response"))
+    svc._album_pool = ThreadPoolExecutor(max_workers=1)
+    assert svc.get_artist_tracks(MagicMock(id="a1", name="Artist")) == []
+
+
+def test_a_fetch_failure_message_is_bounded(svc):
+    """`which` is built from API response data at half the call sites."""
+    svc.client.artist.side_effect = Exception("y" * 5000)
+    with pytest.raises(RuntimeError) as excinfo:
+        svc.get_artist("x" * 5000)
+    assert len(str(excinfo.value)) < 500
+
+
+def test_get_artist_tracks_cancels_queued_work_when_aborting(svc):
+    """Aborting after a rate limit must not leave queued calls hitting the API.
+
+    One worker and six albums: the first raises, the second blocks, and the
+    remaining four are still queued when the abort fires. Those four are the
+    ones cancel() can actually stop, and asserting on them is deterministic —
+    asserting on a call count would race the pool.
+    """
+    albums = [MagicMock(id=f"alb{i}", name=f"Album {i}") for i in range(6)]
+    svc.get_artist_albums = MagicMock(return_value=albums)
+    release = threading.Event()
+
+    def _fetch(album, _artist=None):
+        if album is albums[0]:
+            raise RuntimeError("Apple Music rate-limited")
+        release.wait(timeout=5)
+        return []
+
+    svc.get_album_tracks = MagicMock(side_effect=_fetch)
+
+    submitted = []
+    pool = ThreadPoolExecutor(max_workers=1)
+
+    class _RecordingPool:
+        def submit(self, fn, *args, **kwargs):
+            future = pool.submit(fn, *args, **kwargs)
+            submitted.append(future)
+            return future
+
+    svc._album_pool = _RecordingPool()
+    try:
+        with pytest.raises(RuntimeError, match="rate-limited"):
+            svc.get_artist_tracks(MagicMock(id="a1", name="Artist"))
+        assert any(future.cancelled() for future in submitted), "no queued work was cancelled"
+    finally:
+        release.set()
+        pool.shutdown(wait=True)
