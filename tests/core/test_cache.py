@@ -422,3 +422,27 @@ def test_corrupt_database_file_does_not_abort_startup(tmp_path, monkeypatch):
     monkeypatch.setattr(Cache, "_db_path", lambda self: str(path))
     with Cache("corrupt") as c:
         assert c.read("anything") is None
+
+
+def test_read_survives_a_corrupt_json_value(cache):
+    """A corrupt cache file can hold a row whose value is not valid JSON."""
+    cache.write("key1", {"data": 42})
+    cache._conn.execute("UPDATE cache SET value = ? WHERE key = ?", ("{not json", "key1"))
+    cache._conn.commit()
+    assert cache.read("key1") is None
+
+
+def test_read_stale_survives_a_corrupt_json_value(cache):
+    cache.write("key1", {"data": 42})
+    cache._conn.execute("UPDATE cache SET value = ? WHERE key = ?", ("{not json", "key1"))
+    cache._conn.commit()
+    assert cache.read_stale("key1") is None
+
+
+def test_corrupt_json_is_reported(cache, capsys):
+    cache.write("key1", {"data": 42})
+    cache._conn.execute("UPDATE cache SET value = ? WHERE key = ?", ("{not json", "key1"))
+    cache._conn.commit()
+    capsys.readouterr()
+    cache.read("key1")
+    assert "unusable" in capsys.readouterr().out

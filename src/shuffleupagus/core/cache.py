@@ -58,7 +58,21 @@ class Cache:
         except sqlite3.DatabaseError as exc:
             self._degrade("opening", exc)
 
-    def _degrade(self, operation: str, exc: sqlite3.DatabaseError) -> None:
+    def _decode(self, value: str):
+        """Decode a stored value, degrading to a miss if it is not valid JSON.
+
+        A corrupt database can return a row whose value is not what was written.
+        sqlite reports nothing wrong in that case — the row reads back fine and
+        json.loads is what fails — so this is the same disposable-cache failure
+        as a DatabaseError and takes the same path.
+        """
+        try:
+            return json.loads(value)
+        except ValueError as exc:
+            self._degrade("decoding", exc)
+            return None
+
+    def _degrade(self, operation: str, exc: Exception) -> None:
         """Report a database failure once, then carry on with a cold cache.
 
         The cache is disposable: every value in it can be fetched again from the
@@ -118,7 +132,7 @@ class Cache:
         value, stored_at, ttl = row
         if time.time() - stored_at > ttl:
             return None
-        return json.loads(value)
+        return self._decode(value)
 
     def read_stale(self, key: str):
         """Return the cached value regardless of TTL, or None if absent."""
@@ -131,7 +145,7 @@ class Cache:
                 return None
         if row is None:
             return None
-        return json.loads(row[0])
+        return self._decode(row[0])
 
     def write(self, key: str, obj, ttl: float | None = None):
         """Store a value and return it.
