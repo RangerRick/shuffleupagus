@@ -54,7 +54,7 @@ class SpotifyService(Service):
             client_id=self._require_config("client-id"),
             client_secret=self._require_config("client-secret"),
             scope=self._require_config("scope"),
-            redirect_uri="http://localhost:9090/",
+            redirect_uri="http://127.0.0.1:9090/",
             requests_timeout=_REQUEST_TIMEOUT,
         )
         self.spotify = spotipy.Spotify(
