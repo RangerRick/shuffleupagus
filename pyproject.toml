@@ -56,7 +56,7 @@ dev = [
   # #41 assumed a pre-1.0 compatible-release admits nothing at all and needs a
   # hand-written range. It does not -- verified against packaging.specifiers --
   # so ty takes the same form as everything else here.
-  "ty~=0.0.73",
+  "ty~=0.0.74",
   # Exact pin, not a range: pyright ships new checks in patch releases, so an
   # unpinned gate fails the build on someone else's schedule. Renovate bumps it
   # in a commit instead. The [nodejs] extra brings Node in as a wheel, so
