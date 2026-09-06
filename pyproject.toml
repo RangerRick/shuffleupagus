@@ -43,7 +43,7 @@ build-backend = "uv_build"
 # both groups, not only to the tooling that can break a build -- a test-only
 # dependency that changes behaviour under us costs the same afternoon.
 dev = [
-  "hypothesis~=6.165.10",
+  "hypothesis~=6.167.0",
   # Parses the PEP 440 specifiers in this file for tests/test_dependency_pins.py.
   # It was already present as a transitive dependency; declared here because the
   # tests import it directly. packaging ships two-component versions, so the
