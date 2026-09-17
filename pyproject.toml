@@ -61,7 +61,7 @@ dev = [
   # unpinned gate fails the build on someone else's schedule. Renovate bumps it
   # in a commit instead. The [nodejs] extra brings Node in as a wheel, so
   # `uv sync` is still the only setup step and contributors need no Node install.
-  "pyright[nodejs]==1.1.413",
+  "pyright[nodejs]==1.1.414",
 ]
 
 [tool.ruff]
