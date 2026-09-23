@@ -22,7 +22,7 @@ dependencies = [
   "apple-music-python       ~= 1.0.6",
   "py-applescript           ~= 1.0.3",
   "spotipy                  ~=2.26.0",
-  "ytmusicapi               ~=1.12.2",
+  "ytmusicapi               ~=1.12.3",
 ]
 
 [project.scripts]
