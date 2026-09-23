@@ -896,7 +896,7 @@ dev = [
     { name = "pyright", extras = ["nodejs"], specifier = "==1.1.414" },
     { name = "pytest", specifier = "~=9.1.1" },
     { name = "pytest-cov", specifier = "~=7.1.0" },
-    { name = "ruff", specifier = "~=0.16.7" },
+    { name = "ruff", specifier = "~=0.16.8" },
     { name = "ty", specifier = "~=0.0.81" },
 ]
 
