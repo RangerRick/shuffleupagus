@@ -895,7 +895,7 @@ requires-dist = [
 
 [package.metadata.requires-dev]
 dev = [
-    { name = "hypothesis", specifier = "~=6.168.1" },
+    { name = "hypothesis", specifier = "~=6.168.2" },
     { name = "packaging", specifier = "~=26.3.0" },
     { name = "pyright", extras = ["nodejs"], specifier = "==1.1.414" },
     { name = "pytest", specifier = "~=9.1.1" },
