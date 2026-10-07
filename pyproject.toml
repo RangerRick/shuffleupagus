@@ -16,7 +16,7 @@ dependencies = [
   "colorama                 ~= 0.4.6",
   "coloredlogs              ~=15.0.1",
   "google-api-python-client ~=2.200.0",
-  "google-auth-oauthlib     ~=1.4.1",
+  "google-auth-oauthlib     ~=1.5.0",
   "pyyaml                   ~=6.0.3",
 
   "apple-music-python       ~= 1.0.6",
@@ -35,7 +35,7 @@ shuffleupagus = "shuffleupagus.shuffleupagus:main"
 # The shape is uv's own suggestion. Not `~=` because uv_build is versioned with
 # uv, which moves minors freely; the range tracks the 0.12 line deliberately.
 [build-system]
-requires = ["uv_build>=0.12.20,<0.13"]
+requires = ["uv_build>=0.12.21,<0.13"]
 build-backend = "uv_build"
 
 [dependency-groups]
