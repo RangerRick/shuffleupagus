@@ -43,7 +43,7 @@ build-backend = "uv_build"
 # both groups, not only to the tooling that can break a build -- a test-only
 # dependency that changes behaviour under us costs the same afternoon.
 dev = [
-  "hypothesis~=6.170.0",
+  "hypothesis~=6.170.9",
   # Parses the PEP 440 specifiers in this file for tests/test_dependency_pins.py.
   # It was already present as a transitive dependency; declared here because the
   # tests import it directly. packaging ships two-component versions, so the
@@ -51,12 +51,12 @@ dev = [
   "packaging~=26.3.0",
   "pytest~=9.1.1",
   "pytest-cov~=7.1.0",
-  "ruff~=0.16.10",
+  "ruff~=0.17.2",
   # `~=0.0.72` is `>=0.0.72, ==0.0.*`: it admits 0.0.73 and up, and blocks 0.1.0.
   # #41 assumed a pre-1.0 compatible-release admits nothing at all and needs a
   # hand-written range. It does not -- verified against packaging.specifiers --
   # so ty takes the same form as everything else here.
-  "ty~=0.0.89",
+  "ty~=0.0.91",
   # Exact pin, not a range: pyright ships new checks in patch releases, so an
   # unpinned gate fails the build on someone else's schedule. Renovate bumps it
   # in a commit instead. The [nodejs] extra brings Node in as a wheel, so
