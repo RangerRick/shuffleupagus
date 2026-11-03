@@ -49,7 +49,7 @@ dev = [
   # tests import it directly. packaging ships two-component versions, so the
   # third component is written explicitly to keep this a patch-only range.
   "packaging~=26.3.0",
-  "pytest~=9.1.1",
+  "pytest~=9.2.0",
   "pytest-cov~=7.1.0",
   "ruff~=0.16.10",
   # `~=0.0.72` is `>=0.0.72, ==0.0.*`: it admits 0.0.73 and up, and blocks 0.1.0.
